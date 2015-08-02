@@ -25,8 +25,7 @@
           (or log-callback (null-pointer)))
     (setf (foreign-slot-value ip 'init-params 'connection-timeout-ms)
           (or timeout-ms 0))
-    (%initialize ip))
-  )
+    (%initialize ip)))
 
 (defcfun ("ovr_Shutdown" shutdown) :void
 )
@@ -104,9 +103,14 @@
           :distortion-caps (slot distortion-caps)
           :default-eye-fov (slot default-eye-fov (:struct fov-port-) 2)
           :max-eye-fov (slot max-eye-fov (:struct fov-port-) 2)
-          :eye-render-order (slot eye-render-order eye-type 2)
-          :resolution (slot resolution (:struct sizei-))
-          :windows-pos (slot windows-pos (:struct vector2i-))
+          ;; we tend to use eye as index into things, and can't pass
+          ;; enums to some functions due to cffi bug anyway, so just
+          ;; return it as a number
+          :eye-render-order (slot eye-render-order :unsigned-int 2)
+          ;; but keep the enum version around in case anyone wants it
+          :eye-render-order-symbol (slot eye-render-order eye-type 2)
+          :resolution (slot resolution #++(:struct sizei-))
+          :window-pos (slot window-pos #+=(:struct vector2i-))
           :display-device-name (slot display-device-name)
           :display-id (slot display-id))))
 
@@ -155,42 +159,130 @@
                            ',type)
                          `(getf state ',x)))))
       (list
-       :head-pose (slot head-pose (:struct pose-statef-))
-       :camera-pose (slot camera-pose (:struct posef-))
-       :leveled-camera-pose (slot leveled-camera-pose (:struct posef-))
-       :raw-sensor-data (slot raw-sensor-data (:struct sensor-data-))
-       :status-flags (slot status-flags status-bits)
+       :head-pose (slot head-pose #++(:struct pose-statef-))
+       :camera-pose (slot camera-pose #++(:struct posef-))
+       :leveled-camera-pose (slot leveled-camera-pose #++(:struct posef-))
+       :raw-sensor-data (slot raw-sensor-data #++(:struct sensor-data-))
+       :status-flags (slot status-flags #++ status-bits)
        :last-camera-frame-counter (slot last-camera-frame-counter)
        :pad (slot pad)))))
 
 (defcfun ("ovrHmd_GetFovTextureSize" %ovrhmd::get-fov-texture-size) (:struct sizei-)
   (hmd hmd)
-  (eye eye-type)
+  (eye :unsigned-int) ; eye-type
   (fov fov-port)
   (pixels-per-display-pixel :float))
 
 (defcfun ("ovrHmd_ConfigureRendering" %ovrhmd::configure-rendering)  bool
   (hmd hmd)
-  (api-config (:pointer render-apiconfig))
+  (api-config (:pointer render-api-config))
   (distortion-caps distortion-caps)
   (eye-fov-in (:pointer fov-port)) ;; fov-port :count 2 ?
   (eye-render-desc-out (:pointer eye-render-desc))) ;; eye-render-desc :count 2
 
+(defun configure-rendering (hmd window dc
+                            &key
+                              back-buffer-size
+                              (multisample 0)
+                              (distortion-caps
+                               '(:overdrive :time-warp :vignette))
+                              eye-fov-in)
+  (setf back-buffer-size
+        (or back-buffer-size
+            (foreign-slot-value hmd '%ovrhmd::desc 'resolution)
+            #++(mem-ref (foreign-slot-value hmd '%ovrhmd::desc 'resolution)
+                     '(:struct sizei-))))
+  (setf eye-fov-in
+        (or eye-fov-in
+            (list
+             (mem-aref (foreign-slot-value hmd '%ovrhmd::desc 'default-eye-fov)
+                       '(:struct fov-port-) 0)
+             (mem-aref (foreign-slot-value hmd '%ovrhmd::desc 'default-eye-fov)
+                       '(:struct fov-port-) 1))))
+  (format t "~&configure rendering, fov=-~s~%" eye-fov-in)
+
+  (with-foreign-objects ((config 'render-api-config)
+                         (out '(:struct eye-render-desc-) 2)
+                         (fov '(:struct fov-port-) 2))
+    (setf (foreign-slot-value config 'render-api-config-header :api) :opengl)
+    (setf (mem-ref (foreign-slot-pointer config
+                                         'render-api-config-header
+                                         :back-buffer-size)
+                   '(:struct sizei-))
+          back-buffer-size)
+    (setf (foreign-slot-value config 'render-api-config-header :multisample)
+          multisample)
+    (setf (foreign-slot-value config 'gl-config-data :window) window)
+    (setf (foreign-slot-value config 'gl-config-data :dc) dc)
+    (loop for i below 2
+          do (setf (mem-aref fov '(:struct fov-port-) i)
+                   (elt eye-fov-in i)))
+    (format t "~&~s ~s ~s ~s ~s~%"hmd config distortion-caps
+            (or eye-fov-in (cffi:null-pointer))
+                                  out)
+    (print (loop for i below 8 collect (mem-aref fov :float i)))
+    (print (%ovrhmd::get-last-error hmd))
+    (print
+     (%ovrhmd::configure-rendering hmd config distortion-caps
+                                   fov
+                                   out))
+    (print (%ovrhmd::get-last-error hmd))
+    (format t "got desc ~s~%"
+    (loop for i below 2
+          collect (cffi:mem-aref out '(:struct eye-render-desc-) i)))
+    (loop for i below 2
+          collect (cffi:mem-aref out '(:struct eye-render-desc-) i))
+    ))
 (defcfun ("ovrHmd_BeginFrame" %ovrhmd::begin-frame) (:struct frame-timing-)
   (hmd hmd)
   (frame-index :unsigned-int))
 
-(defcfun ("ovrHmd_EndFrame" %ovrhmd::end-frame) :void
+(defcfun ("ovrHmd_EndFrame" %ovrhmd::%end-frame) :void
   (hmd hmd)
   (render-pose (:pointer posef)) ;; posef :count 2
   (eye-texture (:pointer texture))) ;; texture :count 2
 
-(defcfun ("ovrHmd_GetEyePoses" %ovrhmd::get-eye-poses) :void
+(defmacro without-fp-traps (&body body)
+  #+(and sbcl (or x86 x86-64))
+  `(sb-int:with-float-traps-masked (:invalid :divide-by-zero)
+     ,@body)
+  #-(and sbcl (or x86 x86-64))
+  `(progn ,@body))
+
+(defparameter *foo* 10)
+(incf *foo*)
+(defun end-frame (hmd render-pose eye-textures)
+  (cffi:with-foreign-objects ((poses '(:struct posef-) 2)
+                              (textures '(:struct texture-x) 2))
+    (loop for i below 2
+          do (setf (mem-aref poses '(:struct posef-) i)
+                   (elt render-pose i))
+             ;; using mem-ref and manual size calculation since GL struct
+             ;; doesn't match size of generic struct
+             (setf (mem-ref textures '(:struct texture-)
+                            (* i #. (foreign-type-size '(:struct texture-x))))
+                   (elt eye-textures i)))
+    (without-fp-traps
+     (%ovrhmd::%end-frame hmd poses textures))))
+
+(defcfun ("ovrHmd_GetEyePoses" %ovrhmd::%get-eye-poses) :void
   (hmd hmd)
   (frame-index :unsigned-int)
   (hmd-to-eye-view-offset (:pointer vector3f)) ;; vector3f :count 2
   (out-eye-poses (:pointer posef)) ;; posef :count 2
   (out-hmd-tracking-state (:pointer tracking-state)))
+
+(defun get-eye-poses (hmd hmd-to-eye-view-offsets &key (frame-index 0))
+  (with-foreign-objects ((poses 'posef 2)
+                         (state 'tracking-state)
+                         (offsets 'vector3f 2))
+    (loop for i below 2
+          for o = (elt hmd-to-eye-view-offsets i)
+          do (setf (mem-aref offsets '(:struct vector3f-) i) o))
+    (%ovrhmd::%get-eye-poses hmd frame-index offsets poses state)
+    (values (loop for i below 2
+                  collect  (mem-aref poses '(:struct posef-) i))
+            (mem-ref state '(:struct tracking-state-)))))
 
 (defcfun ("ovrHmd_GetHmdPosePerEye" %ovrhmd::get-hmd-pose-per-eye) (:struct posef-)
   (hmd hmd)
@@ -198,7 +290,7 @@
 
 (defcfun ("ovrHmd_GetRenderDesc" %ovrhmd::get-render-desc) (:struct eye-render-desc-)
   (hmd hmd)
-  (eye-type eye-type)
+  (eye-type :unsigned-int ) ;; eye-type
   (fov fov-port))
 
 (defcfun ("ovrHmd_CreateDistortionMesh" %ovrhmd::create-distortion-mesh)
@@ -341,11 +433,18 @@
 (defcfun ("ovrHmd_StopPerfLog" %ovrhmd::stop-perf-log) bool
   (hmd hmd))
 
-(defcfun ("ovrMatrix4f_Projection" matrix4f-projection) (:struct matrix4f-)
-  (fov fov-port)
+(defcfun ("ovrMatrix4f_Projection" %matrix4f-projection) (:struct matrix4f-)
+  (fov (:struct fov-port-))
   (znear :float)
   (zfar :float)
-  (projection-mod-flags projection-modifier))
+  (projection-mod-flags :unsigned-int)) ;;projection-modifier
+
+(defun matrix4f-projection (fov znear zfar projection-mod-flags)
+  (%matrix4f-projection fov znear zfar
+                        (foreign-bitfield-value
+                         'projection-modifier-
+                         projection-mod-flags))
+  )
 
 (defcfun ("ovrMatrix4f_OrthoSubProjection" matrix4f-ortho-sub-projection) (:struct matrix4f-)
   (projection matrix4f)
@@ -355,3 +454,10 @@
 
 (defcfun ("ovr_WaitTillTime" wait-till-time) :double
   (abs-time :double))
+
+
+
+ (initialize :debug t)
+
+;(shutdown)
+
