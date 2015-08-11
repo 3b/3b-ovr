@@ -359,13 +359,13 @@
       v)))
 
 (defcstruct tracking-state-
-  (head-pose (:struct pose-statef-))
-  (camera-pose (:struct posef-))
-  (leveled-camera-pose (:struct posef-))
-  (raw-sensor-data (:struct sensor-data-))
-  (status-flags status-bits-)
-  (last-camera-frame-counter uint32-t)
-  (pad uint32-t))
+  (:head-pose (:struct pose-statef-))
+  (:camera-pose (:struct posef-))
+  (:leveled-camera-pose (:struct posef-))
+  (:raw-sensor-data (:struct sensor-data-))
+  (:status-flags status-bits-)
+  (:last-camera-frame-counter uint32-t)
+  (:pad uint32-t))
 
 (defctype tracking-state (:struct tracking-state-))
 

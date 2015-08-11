@@ -145,8 +145,11 @@
   (hmd hmd)
   (abs-time :double))
 
+
 (defun %ovrhmd::get-tracking-state (hmd
                                     &optional (abs-time (get-time-in-seconds)))
+  (%ovrhmd::%get-tracking-state hmd abs-time)
+  #++
   (let ((state (%ovrhmd::%get-tracking-state hmd abs-time)))
     (macrolet ((slot (x &optional type n)
                  (if n
