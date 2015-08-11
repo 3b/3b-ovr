@@ -220,7 +220,7 @@
     (loop for i below 2
           do (setf (mem-aref fov '(:struct fov-port-) i)
                    (elt eye-fov-in i)))
-    (format t "~&~s ~s ~s ~s ~s~%"hmd config distortion-caps
+    (format t "~&hmd ~s config ~s~% distortion caps :~s~% eye-fov-in ~s~% out ~s~%"hmd config distortion-caps
             (or eye-fov-in (cffi:null-pointer))
                                   out)
     (print (loop for i below 8 collect (mem-aref fov :float i)))
@@ -230,7 +230,7 @@
                                    fov
                                    out))
     (print (%ovrhmd::get-last-error hmd))
-    (format t "got desc ~s~%"
+    (format t "~&got desc ~s~%"
     (loop for i below 2
           collect (cffi:mem-aref out '(:struct eye-render-desc-) i)))
     (loop for i below 2
