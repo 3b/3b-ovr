@@ -4,8 +4,7 @@
 (in-package #:3bovr-test)
 
 (defclass 3bovr-test (glop:window)
-  ((hmd :reader hmd :initarg :hmd)
-   (fbo :reader fbo :initarg :fbo)))
+  ((hmd :reader hmd :initarg :hmd)))
 
 
 
@@ -18,37 +17,100 @@
   ;; ignore any other events
   (declare (ignore window event)))
 
-(defun cube (x y z r)
-  (let* ((x (coerce x 'single-float))
-         (y (coerce y 'single-float))
-         (z (coerce z 'single-float))
-         (r (coerce r 'single-float))
-         (a (sb-cga:vec (- r) (- r) (- r)))
-         (b (sb-cga:vec (- r) (+ r) (- r)))
-         (c (sb-cga:vec (+ r) (+ r) (- r)))
-         (d (sb-cga:vec (+ r) (- r) (- r)))
-         (fpi (coerce pi 'single-float)))
-    (loop for m in (list (sb-cga:rotate* 0.0 0.0 0.0)
-                         (sb-cga:rotate* 0.0 (* fpi 1/2) 0.0)
-                         (sb-cga:rotate* 0.0 (* fpi 2/2) 0.0)
-                         (sb-cga:rotate* 0.0 (* fpi 3/2) 0.0)
-                         (sb-cga:rotate* (* fpi 1/2) 0.0 0.0)
-                         (sb-cga:rotate* (* fpi 3/2) 0.0 0.0))
-          do (let ((n (sb-cga:transform-point (sb-cga:vec 0.0 0.0 1.0) m)))
-               (gl:normal (aref n 0) (aref n 1) (aref n 2)))
-             (flet ((v (v)
-                                 (let ((v (sb-cga:transform-point v m)))
-                                   (gl:vertex (+ x (aref v 0))
-                                              (+ y (aref v 1))
-                                              (+ z (aref v 2))))))
-                  (v a)
-                  (v b)
-                  (v c)
-                  (v a)
-                  (v c)
-                  (v d)))))
 
-(defun draw-world ()
+
+(defun build-world (vao)
+  (let ((vbo (gl:gen-buffer))
+        (color (vector 0 0 0 1))
+        (normal (vector 1 0 0))
+        (buf (make-array '(1024) :element-type 'single-float
+                         :fill-pointer 0 :adjustable t))
+        (count 0))
+   (labels ((color (r g b &optional (a 1))
+              (setf color (vector r g b a)))
+            (normal (x y z)
+              (setf normal (vector x y z)))
+            (vertex (x y z &optional (w 1))
+              (loop for i in (list x y z w)
+                    do (vector-push-extend (float i 0.0) buf))
+              (loop for i across color
+                    do (vector-push-extend (float i 0.0) buf))
+              (loop for i across normal
+                    do (vector-push-extend (float i 0.0) buf))
+              (incf count))
+            (cube (x y z r)
+              (let* ((x (coerce x 'single-float))
+                     (y (coerce y 'single-float))
+                     (z (coerce z 'single-float))
+                     (r (coerce r 'single-float))
+                     (a (sb-cga:vec (- r) (- r) (- r)))
+                     (b (sb-cga:vec (- r) (+ r) (- r)))
+                     (c (sb-cga:vec (+ r) (+ r) (- r)))
+                     (d (sb-cga:vec (+ r) (- r) (- r)))
+                     (fpi (coerce pi 'single-float)))
+                (loop for m in (list (sb-cga:rotate* 0.0 0.0 0.0)
+                                     (sb-cga:rotate* 0.0 (* fpi 1/2) 0.0)
+                                     (sb-cga:rotate* 0.0 (* fpi 2/2) 0.0)
+                                     (sb-cga:rotate* 0.0 (* fpi 3/2) 0.0)
+                                     (sb-cga:rotate* (* fpi 1/2) 0.0 0.0)
+                                     (sb-cga:rotate* (* fpi 3/2) 0.0 0.0))
+                      do (let ((n (sb-cga:transform-point
+                                   (sb-cga:vec 0.0 0.0 1.0) m)))
+                           (normal (aref n 0) (aref n 1) (aref n 2)))
+                         (flet ((v (v)
+                                  (let ((v (sb-cga:transform-point v m)))
+                                    (vertex (+ x (aref v 0))
+                                            (+ y (aref v 1))
+                                            (+ z (aref v 2))))))
+                           (v a)
+                           (v b)
+                           (v c)
+                           (v a)
+                           (v c)
+                           (v d))))))
+     ;; checkerboard ground
+     (loop for i from -8 below 8
+           do (loop for j from -8 below 8
+                    for p = (oddp (+ i j))
+                    do (if p
+                           (color 0.0 0.9 0.9 1.0)
+                           (color 0.1 0.1 0.1 1.0))
+                       (vertex i -0.66 j)
+                       (vertex (1+ i) -0.66 j)
+                       (vertex (1+ i) -0.66 (1+ j))
+                       (vertex i -0.66 j)
+                       (vertex (1+ i) -0.66 (1+ j))
+                       (vertex i -0.66 (1+ j))))
+     ;; and some random cubes
+     (let ((*random-state* (make-random-state *random-state*))
+           (r 20.0))
+       (flet ((r () (- (random r) (/ r 2))))
+         (loop for i below 5000
+               do (color (random 1.0) (+ 0.5 (random 0.5)) (random 1.0) 1.0)
+                  (cube (+ 0.0 (r)) (- (r)) (+ 1.5 (r)) (+ 0.05 (random 0.10))))))
+     (let ((stride (* 11 4)))
+       (gl:bind-buffer :array-buffer vbo)
+       (%gl:buffer-data :array-buffer (* count stride) (cffi:null-pointer)
+                        :static-draw)
+       (gl:bind-vertex-array vao)
+       (gl:enable-client-state :vertex-array)
+       (%gl:vertex-pointer 4 :float stride (cffi:null-pointer))
+       (gl:enable-client-state :normal-array)
+       (%gl:normal-pointer :float stride (* 8 4))
+       (gl:enable-client-state :color-array)
+       (%gl:color-pointer 4 :float stride (* 4 4))
+)
+     (let ((p (%gl:map-buffer :array-buffer :write-only)))
+       (unwind-protect
+            (loop for i below (fill-pointer buf)
+                  do (setf (cffi:mem-aref p :float i)
+                           (aref buf i)))
+         (%gl:unmap-buffer :array-buffer)))
+     (gl:bind-vertex-array 0)
+     (gl:delete-buffers (list vbo))
+     count)))
+
+(defun draw-world (vao count)
   (gl:clear :color-buffer :depth-buffer)
   (gl:disable :texture-2d)
   (gl:enable :framebuffer-srgb
@@ -56,32 +118,15 @@
              :lighting :light0 :color-material)
   (gl:blend-func :src-alpha :one-minus-src-alpha)
   (gl:polygon-mode :front-and-back :fill)
-  (gl:light :light0 :position '(100.0 100.0 10.0 0.0))
-  ;; draw a checkerboard ground
-  (gl:with-primitives :quads
-    (loop for i from -8 below 8
-          do (loop for j from -8 below 8
-                   for p = (oddp (+ i j))
-                   do (if p
-                          (gl:color 0.0 0.9 0.9 1.0)
-                          (gl:color 0.1 0.1 0.1 1.0))
-                      (gl:vertex i -0.66 j)
-                      (gl:vertex (1+ i) -0.66 j)
-                      (gl:vertex (1+ i) -0.66 (1+ j))
-                      (gl:vertex i -0.66 (1+ j)))))
-
-  ;; and some random cubes
-  (let ((*random-state* (make-random-state *random-state*))
-        (r 20.0))
-    (gl:point-size 8)
-    (gl:with-primitives :triangles
-     (flet ((r () (- (random r) (/ r 2))))
-       (loop for i below 1000
-             do (gl:color (random 1.0) (random 1.0) (random 1.0) 1.0)
-                (cube (+ 0.0 (r)) (- (r)) (+ 1.5 (r)) (+ 0.05 (random 0.10))))))))
+  (gl:light :light0 :position '(100.0 -120.0 -10.0 0.0))
+  (when count
+    (gl:bind-vertex-array vao)
+    (%gl:draw-arrays :triangles 0 count)
+    (gl:bind-vertex-array 0)))
 
 
-(defun draw-frame (hmd &key eye-render-desc fbo eye-textures)
+(defun draw-frame (hmd &key eye-render-desc fbo eye-textures
+                         vao count)
   (assert (and eye-render-desc fbo eye-textures))
   (let* ((timing (%ovrhmd::begin-frame hmd
                                        ;; don't need to pass index
@@ -103,7 +148,8 @@
     (declare (ignorable timing))
     ;; get position of eyes
     (multiple-value-bind (head-pose tracking-state)
-        (%ovr::get-eye-poses hmd (mapcar (lambda (a)
+        (%ovr::get-eye-poses hmd
+                             (mapcar (lambda (a)
                                            (getf a :hmd-to-eye-view-offset))
                                          eye-render-desc))
 
@@ -138,9 +184,9 @@
                           (getf (elt eye-render-desc eye)
                                 :fov)
                           0.1 1000.0 ;; near/far
+                          0.5 1000.0 ;; near/far
                           ;; request GL style matrix
-                          '(:right-handed
- :clip-range-open-gl))
+                          '(:right-handed :clip-range-open-gl))
         ;; draw scene to fbo for 1 eye
         do (flet ((viewport (x)
                     ;; set viewport and scissor from texture config we
@@ -169,7 +215,7 @@
                (gl:translate (- (aref position 0))
                              (- (aref position 1))
                              (- (aref position 2)))
-               (draw-world))))
+               (draw-world vao count))))
       (gl:bind-framebuffer :framebuffer 0)
       ;; pass textures to SDK for distortion, display and vsync
       (%ovr::end-frame hmd head-pose eye-textures))))
@@ -177,7 +223,7 @@
 
 (defun test-3bovr ()
   ;; initialize library
-  (%ovr::with-ovr ok (:debug t :timeout-ms 500)
+  (%ovr::with-ovr ok (:debug nil :timeout-ms 500)
     (unless ok
       (format t "couldn't initialize libovr~%")
       (return-from test-3bovr nil))
@@ -190,7 +236,7 @@
       (unless hmd
         (format t "couldn't open hmd 0~%")
         (return-from test-3bovr nil))
-      ;; print out info aobut the HMD
+      ;; print out info about the HMD
       (let ((props (%ovr::dump-hmd-to-plist hmd)) ;; decode the HMD struct
             w h x y
             eye-render-desc)
@@ -219,29 +265,32 @@
           ;; configure rendering and save eye render params
           ;; todo: linux/mac versions
           (setf eye-render-desc
-                (%ovr::configure-rendering hmd
-                                           (glop::win32-window-id win)
-                                           (glop::win32-window-dc win)))
+                (print
+                 (%ovr::configure-rendering hmd
+                                            (glop::win32-window-id win)
+                                            (glop::win32-window-dc win))))
           ;; attach libovr runtime to window
           (%ovrhmd::attach-to-window hmd
                                      (glop::win32-window-id win)
                                      (cffi:null-pointer) (cffi:null-pointer))
           ;; configure FBO for offscreen rendering of the eye views
-          (let* ((fbo (gl:gen-framebuffer))
+          (let* ((vao (gl:gen-vertex-array))
+                 (count 0)
+                 (fbo (gl:gen-framebuffer))
                  (texture (gl:gen-texture))
                  (renderbuffer (gl:gen-renderbuffer))
                  ;; get recommended sizes of eye textures
                  (ls (%ovrhmd::get-fov-texture-size hmd %ovr::+eye-left+
                                                     ;; use default fov
-                                                    (elt (getf props
-                                                               :default-eye-fov)
-                                                         %ovr::+eye-left+)
+                                                    (getf (elt eye-render-desc
+                                                               %ovr::+eye-left+)
+                                                          :fov)
                                                     ;; and no scaling
                                                     1.0))
                  (rs (%ovrhmd::get-fov-texture-size hmd %ovr::+eye-right+
-                                                    (elt (getf props
-                                                               :default-eye-fov)
-                                                         %ovr::+eye-right+)
+                                                    (getf (elt eye-render-desc
+                                                               %ovr::+eye-right+)
+                                                          :fov)
                                                     1.0))
                  ;; storing both eyes in 1 texture, so figure out combined size
                  (fbo-w (+ (getf ls :w) (getf rs :w)))
@@ -263,8 +312,8 @@
             (gl:bind-texture :texture-2d texture)
             (gl:tex-parameter :texture-2d :texture-wrap-s :repeat)
             (gl:tex-parameter :texture-2d :texture-wrap-t :repeat)
-            (gl:tex-parameter :texture-2d :texture-min-filter :nearest)
-            (gl:tex-parameter :texture-2d :texture-mag-filter :nearest)
+            (gl:tex-parameter :texture-2d :texture-min-filter :linear)
+            (gl:tex-parameter :texture-2d :texture-mag-filter :linear)
             (gl:tex-image-2d :texture-2d 0 :srgb8-alpha8 fbo-w fbo-h
                              0 :rgba :unsigned-int (cffi:null-pointer))
             (gl:bind-framebuffer :framebuffer fbo)
@@ -279,11 +328,16 @@
                     (gl:check-framebuffer-status :framebuffer))
             (gl:bind-framebuffer :framebuffer 0)
 
+            ;; set up a vao containing a simple 'world' geometry
+            (setf count (build-world vao))
+
             ;; main loop
             (loop while (glop:dispatch-events win :blocking nil :on-foo nil)
                   do (draw-frame hmd :eye-render-desc eye-render-desc
-                                     :fbo fbo :eye-textures eye-textures))
+                                     :fbo fbo :eye-textures eye-textures
+                                     :vao vao :count count))
             ;; clean up
+            (gl:delete-vertex-arrays (list vao))
             (gl:delete-framebuffers (list fbo))
             (gl:delete-textures (list texture))
             (gl:delete-renderbuffers (list renderbuffer))))))))
