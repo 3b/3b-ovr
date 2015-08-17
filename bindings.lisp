@@ -14,6 +14,7 @@
                                  :eye_cup "EyeCup" ;; char[16]
                                  :custom_eye_render "CustomEyeRender" ;; bool
                                  :camera_position "CenteredFromWorld" ;; double[7]
+                                 :dk2-latency "DK2Latency"
                                  )))
 
 (defcfun ("ovr_InitializeRenderingShimVersion" initialize-rendering-shim-version) bool
@@ -141,12 +142,12 @@
   (dest-mirror-rect (:pointer recti))
   (source-render-target-rect (:pointer recti)))
 
-(defcfun ("ovrHmd_GetEnabledCaps" %ovrhmd::get-enabled-caps) %ovrhmd::caps
+(defcfun ("ovrHmd_GetEnabledCaps" %ovrhmd::get-enabled-caps) %ovrhmd::caps-
   (hmd hmd))
 
 (defcfun ("ovrHmd_SetEnabledCaps" %ovrhmd::set-enabled-caps) :void
   (hmd hmd)
-  (hmd-caps %ovrhmd::caps))
+  (hmd-caps %ovrhmd::caps-))
 
 (defcfun ("ovrHmd_ConfigureTracking" %ovrhmd::configure-tracking) bool
   (hmd hmd)
@@ -198,18 +199,25 @@
   (eye-fov-in (:pointer fov-port)) ;; fov-port :count 2 ?
   (eye-render-desc-out (:pointer eye-render-desc))) ;; eye-render-desc :count 2
 
-(defun configure-rendering (hmd window dc
+(defun configure-rendering (hmd
                             &key
                               back-buffer-size
                               (multisample 0)
                               (distortion-caps
                                '(:overdrive :time-warp :vignette))
-                              eye-fov-in)
+                              eye-fov-in
+                              ;; optional settings used only on windows
+                              win-dc
+                              win-window
+                              ;; optional settings used only on linux
+                              ;; (no corresponding option for osx?)
+                              linux-display)
+  (declare (ignorable win-dc win-window linux-display))
   (setf back-buffer-size
         (or back-buffer-size
             (foreign-slot-value hmd '%ovrhmd::desc 'resolution)
             #++(mem-ref (foreign-slot-value hmd '%ovrhmd::desc 'resolution)
-                     '(:struct sizei-))))
+                        '(:struct sizei-))))
   (setf eye-fov-in
         (or eye-fov-in
             (list
@@ -230,14 +238,21 @@
           back-buffer-size)
     (setf (foreign-slot-value config 'render-api-config-header :multisample)
           multisample)
-    (setf (foreign-slot-value config 'gl-config-data :window) window)
-    (setf (foreign-slot-value config 'gl-config-data :dc) dc)
+    #+windows
+    (progn
+      (setf (foreign-slot-value config 'gl-config-data :window)
+            (or window (cffi:null-pointer)))
+      (setf (foreign-slot-value config 'gl-config-data :dc)
+            (or dc (cffi:null-pointer))))
+    #+linux
+    (setf (foreign-slot-value config 'gl-config-data :x-display)
+          (or linux-display (cffi:null-pointer)))
     (loop for i below 2
           do (setf (mem-aref fov '(:struct fov-port-) i)
                    (elt eye-fov-in i)))
     (format t "~&hmd ~s config ~s~% distortion caps :~s~% eye-fov-in ~s~% out ~s~%"hmd config distortion-caps
             (or eye-fov-in (cffi:null-pointer))
-                                  out)
+            out)
     (print (loop for i below 8 collect (mem-aref fov :float i)))
     (print (%ovrhmd::get-last-error hmd))
     (print
@@ -246,11 +261,41 @@
                                    out))
     (print (%ovrhmd::get-last-error hmd))
     (format t "~&got desc ~s~%"
-    (loop for i below 2
-          collect (cffi:mem-aref out '(:struct eye-render-desc-) i)))
+            (loop for i below 2
+                  collect (cffi:mem-aref out '(:struct eye-render-desc-) i)))
     (loop for i below 2
           collect (cffi:mem-aref out '(:struct eye-render-desc-) i))
     ))
+
+;; linux sdk 0.5.0.1 tries to unconfigure rendering, which segfaults
+;; if the window is already closed, so add a wrapper to make it easier
+;; to unconfigure it sooner by hand
+(defmacro with-configure-rendering (desc-var
+                                    (hmd
+                                     &rest args
+                                     &key
+                                       back-buffer-size
+                                       (multisample 0)
+                                       (distortion-caps
+                                        '(:overdrive :time-warp :vignette))
+                                       eye-fov-in
+                                       ;; optional settings used only on windows
+                                       win-dc
+                                       win-window
+                                       ;; optional settings used only on linux
+                                       ;; (no corresponding option for osx?)
+                                       linux-display)
+                                    &body body)
+  (declare (ignore back-buffer-size multisample distortion-caps
+                   eye-fov-in win-dc win-window linux-display))
+  (let ((desc-var (or desc-var (gensym))))
+    (alexandria:once-only (hmd)
+      `(unwind-protect
+            (let ((,desc-var (configure-rendering ,hmd ,@args)))
+              ,@body)
+         (%ovrhmd::configure-rendering ,hmd (cffi:null-pointer) 0
+                                       (cffi:null-pointer)
+                                       (cffi:null-pointer))))))
 (defcfun ("ovrHmd_BeginFrame" %ovrhmd::begin-frame) (:struct frame-timing-)
   (hmd hmd)
   (frame-index :unsigned-int))
@@ -309,7 +354,7 @@
 (defcfun ("ovrHmd_GetRenderDesc" %ovrhmd::get-render-desc) (:struct eye-render-desc-)
   (hmd hmd)
   (eye-type :unsigned-int ) ;; eye-type
-  (fov fov-port))
+  (fov (:struct fov-port-)))
 
 (defcfun ("ovrHmd_CreateDistortionMesh" %ovrhmd::create-distortion-mesh)
     :char ;;bool
@@ -441,11 +486,20 @@
   (property-name ovr-key)
   (value :float))
 
-(defcfun ("ovrHmd_GetFloatArray" %ovrhmd::get-float-array) :unsigned-int
+(defcfun ("ovrHmd_GetFloatArray" %ovrhmd::%get-float-array) :unsigned-int
   (hmd hmd)
   (property-name ovr-key)
   (values (:pointer :float))
   (array-size :unsigned-int))
+
+(defun get-float-array (hmd key count)
+  (cffi:with-foreign-object (p :float count)
+    (let ((w (%ovrhmd::%get-float-array hmd key p count)))
+      ;; possibly should return a (typed?) vector?
+      ;; possibly should return COUNT values even if fewer are returned?
+      ;;   (if so, should return W as 2nd value)
+      (loop for i below w
+            collect (mem-aref p :float i)))))
 
 (defcfun ("ovrHmd_SetFloatArray" %ovrhmd::set-float-array) bool
   (hmd hmd)

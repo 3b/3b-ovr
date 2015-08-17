@@ -10,8 +10,13 @@
 
 (defmethod glop:on-event ((window 3bovr-test) (event glop:key-event))
   ;; exit on ESC key
-  (when (eq (glop:keysym event) :escape)
-    (glop:push-close-event window)))
+  (when (glop:pressed event)
+    (case (glop:keysym event)
+      (:escape
+       (glop:push-close-event window))
+      (:space
+       (format t "latency = ~{~,,3f ~,,3f ~,,3f ~,,3f ~,,3f~}~%"
+               (%ovr::get-float-array (hmd window) :dk2-latency 5))))))
 
 (defmethod glop:on-event ((window 3bovr-test) event)
   ;; ignore any other events
@@ -133,7 +138,7 @@
                                        ;; unless we use
                                        ;; get-frame-timing
                                        0))
-         (props (%ovr::dump-hmd-to-plist hmd))
+         ;;(props (%ovr::dump-hmd-to-plist hmd))
          ;; get current hmd position/orientation
          ;;(state (%ovrhmd::get-tracking-state hmd))
          ;;(pose (getf state :head-pose))
@@ -184,7 +189,6 @@
                           (getf (elt eye-render-desc eye)
                                 :fov)
                           0.1 1000.0 ;; near/far
-                          0.5 1000.0 ;; near/far
                           ;; request GL style matrix
                           '(:right-handed :clip-range-open-gl))
         ;; draw scene to fbo for 1 eye
@@ -220,129 +224,177 @@
       ;; pass textures to SDK for distortion, display and vsync
       (%ovr::end-frame hmd head-pose eye-textures))))
 
+(defparameter *once* nil)
 
 (defun test-3bovr ()
+  (when *once*
+    ;; running it twice at once breaks things, so try to avoid that...
+    (format t "already running?~%")
+    (return-from test-3bovr nil))
   ;; initialize library
-  (%ovr::with-ovr ok (:debug nil :timeout-ms 500)
-    (unless ok
-      (format t "couldn't initialize libovr~%")
-      (return-from test-3bovr nil))
-    ;; print out some info
-    (format t "version: ~s~%" (%ovr::get-version-string))
-    (format t "time = ~,3f~%" (%ovr::get-time-in-seconds))
-    (format t "detect: ~s HMDs available~%" (%ovrhmd::detect))
-    ;; try to open an HMD
-    (%ovr::with-hmd (hmd)
-      (unless hmd
-        (format t "couldn't open hmd 0~%")
-        (return-from test-3bovr nil))
-      ;; print out info about the HMD
-      (let ((props (%ovr::dump-hmd-to-plist hmd)) ;; decode the HMD struct
-            w h x y
-            eye-render-desc)
-        (format t "got hmd ~{~s ~s~^~%        ~}~%" props)
-        ;; turn on the tracking
-        (%ovrhmd::configure-tracking hmd
-                                     ;; desired tracking capabilities
-                                     '(:orientation :mag-yaw-correction
-                                       :position)
-                                     ;; required tracking capabilities
-                                     nil)
-        ;; figure out where to put the window
-        (setf w (getf (getf props :resolution) :w))
-        (setf h (getf (getf props :resolution) :h))
-        (setf x (aref (getf props :window-pos) 0))
-        (setf y (aref (getf props :window-pos) 1))
-        ;; create window
-        (format t "opening ~sx~s window at ~s,~s~%" w h x y)
-        (glop:with-window (win
-                           "3bovr test window"
-                           w h
-                           :x x :y y
-                           :win-class '3bovr-test
-                           :fullscreen t
-                           :depth-size 16)
-          ;; configure rendering and save eye render params
-          ;; todo: linux/mac versions
-          (setf eye-render-desc
-                (print
-                 (%ovr::configure-rendering hmd
+  (setf *once* t)
+  (unwind-protect
+       (%ovr::with-ovr ok (:debug nil :timeout-ms 500)
+         (unless ok
+           (format t "couldn't initialize libovr~%")
+           (return-from test-3bovr nil))
+         ;; print out some info
+         (format t "version: ~s~%" (%ovr::get-version-string))
+         (format t "time = ~,3f~%" (%ovr::get-time-in-seconds))
+         (format t "detect: ~s HMDs available~%" (%ovrhmd::detect))
+         ;; try to open an HMD
+         (%ovr::with-hmd (hmd)
+           (unless hmd
+             (format t "couldn't open hmd 0~%")
+             (format t "error = ~s~%"(%ovrhmd::get-last-error (cffi:null-pointer)))
+             (return-from test-3bovr nil))
+           ;; print out info about the HMD
+           (let ((props (%ovr::dump-hmd-to-plist hmd)) ;; decode the HMD struct
+                 w h x y)
+             (format t "got hmd ~{~s ~s~^~%        ~}~%" props)
+             (format t "enabled caps = ~s~%" (%ovrhmd::get-enabled-caps hmd))
+             (%ovrhmd::set-enabled-caps hmd '(:low-persistence
+                                              :dynamic-prediction))
+             (format t "             -> ~s~%" (%ovrhmd::get-enabled-caps hmd))
+             ;; turn on the tracking
+             (%ovrhmd::configure-tracking hmd
+                                          ;; desired tracking capabilities
+                                          '(:orientation :mag-yaw-correction
+                                            :position)
+                                          ;; required tracking capabilities
+                                          nil)
+             ;; figure out where to put the window
+             (setf w (getf (getf props :resolution) :w))
+             (setf h (getf (getf props :resolution) :h))
+             (setf x (aref (getf props :window-pos) 0))
+             (setf y (aref (getf props :window-pos) 1))
+             #+linux
+             (when (eq (getf props :type) :dk2)
+               ;; sdk is reporting resolution as 1920x1080 when screen is
+               ;; set to 1080x1920 in twinview?
+               (format t "overriding resolution from ~sx~s to ~sx~s~%"
+                       w h 1080 1920)
+               (setf w 1080 h 1920))
+             ;; create window
+             (format t "opening ~sx~s window at ~s,~s~%" w h x y)
+             (glop:with-window (win
+                                "3bovr test window"
+                                w h
+                                :x x :y y
+                                :win-class '3bovr-test
+                                :fullscreen t
+                                :depth-size 16)
+               (setf (slot-value win 'hmd) hmd)
+               ;; configure rendering and save eye render params
+               ;; todo: linux/mac versions
+               (%ovr::with-configure-rendering eye-render-desc
+                   (hmd
+                    ;; specify window size since defaults don't match on
+                    ;; linux sdk with non-rotated dk2
+                    :back-buffer-size (list :w w :h h)
+                    ;; optional: specify which window/DC to draw into
+                    ;;#+linux :linux-display
+                    ;;#+linux(glop:x11-window-display win)
+                    ;;#+windows :win-window
+                    ;;#+windows(glop::win32-window-id win)
+                    ;;#+windows :win-dc
+                    ;;#+windows (glop::win32-window-dc win)
+                    :distortion-caps
+                    '(:time-warp :vignette
+                      :srgb :overdrive :hq-distortion
+                      #+linux :linux-dev-fullscreen))
+                 ;; attach libovr runtime to window
+                 #+windows
+                 (%ovrhmd::attach-to-window hmd
                                             (glop::win32-window-id win)
-                                            (glop::win32-window-dc win))))
-          ;; attach libovr runtime to window
-          (%ovrhmd::attach-to-window hmd
-                                     (glop::win32-window-id win)
-                                     (cffi:null-pointer) (cffi:null-pointer))
-          ;; configure FBO for offscreen rendering of the eye views
-          (let* ((vao (gl:gen-vertex-array))
-                 (count 0)
-                 (fbo (gl:gen-framebuffer))
-                 (texture (gl:gen-texture))
-                 (renderbuffer (gl:gen-renderbuffer))
-                 ;; get recommended sizes of eye textures
-                 (ls (%ovrhmd::get-fov-texture-size hmd %ovr::+eye-left+
-                                                    ;; use default fov
-                                                    (getf (elt eye-render-desc
-                                                               %ovr::+eye-left+)
-                                                          :fov)
-                                                    ;; and no scaling
-                                                    1.0))
-                 (rs (%ovrhmd::get-fov-texture-size hmd %ovr::+eye-right+
-                                                    (getf (elt eye-render-desc
-                                                               %ovr::+eye-right+)
-                                                          :fov)
-                                                    1.0))
-                 ;; storing both eyes in 1 texture, so figure out combined size
-                 (fbo-w (+ (getf ls :w) (getf rs :w)))
-                 (fbo-h (max (getf ls :h) (getf rs :h)))
-                 ;; describe the texture configuration for libovr
-                 (eye-textures
-                   (loop for v in (list (list :pos #(0 0)
-                                              :size ls)
-                                        (list :pos (vector (getf ls :w) 0)
-                                              :size rs))
-                         collect
-                         `(:texture ,texture
-                           :render-viewport ,v
-                           :texture-size (:w ,fbo-w :h ,fbo-h)
-                           :api :opengl))))
-            ;; configure the fbo/texture
-            (format t "left eye tex size = ~s, right = ~s~% total =~sx~a~%"
-                    ls rs fbo-w fbo-h)
-            (gl:bind-texture :texture-2d texture)
-            (gl:tex-parameter :texture-2d :texture-wrap-s :repeat)
-            (gl:tex-parameter :texture-2d :texture-wrap-t :repeat)
-            (gl:tex-parameter :texture-2d :texture-min-filter :linear)
-            (gl:tex-parameter :texture-2d :texture-mag-filter :linear)
-            (gl:tex-image-2d :texture-2d 0 :srgb8-alpha8 fbo-w fbo-h
-                             0 :rgba :unsigned-int (cffi:null-pointer))
-            (gl:bind-framebuffer :framebuffer fbo)
-            (gl:framebuffer-texture-2d :framebuffer :color-attachment0
-                                       :texture-2d texture 0)
-            (gl:bind-renderbuffer :renderbuffer renderbuffer)
-            (gl:renderbuffer-storage :renderbuffer :depth-component24
-                                     fbo-w fbo-h)
-            (gl:framebuffer-renderbuffer :framebuffer :depth-attachment
-                                         :renderbuffer renderbuffer)
-            (format t "created renderbuffer status = ~s~%"
-                    (gl:check-framebuffer-status :framebuffer))
-            (gl:bind-framebuffer :framebuffer 0)
+                                            (cffi:null-pointer) (cffi:null-pointer))
+                 ;; configure FBO for offscreen rendering of the eye views
+                 (let* ((vao (gl:gen-vertex-array))
+                        (count 0)
+                        (fbo (gl:gen-framebuffer))
+                        (texture (gl:gen-texture))
+                        (renderbuffer (gl:gen-renderbuffer))
+                        ;; get recommended sizes of eye textures
+                        (ls (%ovrhmd::get-fov-texture-size hmd %ovr::+eye-left+
+                                                           ;; use default fov
+                                                           (getf (elt eye-render-desc
+                                                                      %ovr::+eye-left+)
+                                                                 :fov)
+                                                           ;; and no scaling
+                                                           1.0))
+                        (rs (%ovrhmd::get-fov-texture-size hmd %ovr::+eye-right+
+                                                           (getf (elt eye-render-desc
+                                                                      %ovr::+eye-right+)
+                                                                 :fov)
+                                                           1.0))
+                        ;; put space between eyes to avoid interference
+                        (padding 16)
+                        ;; storing both eyes in 1 texture, so figure out combined size
+                        (fbo-w (+ (getf ls :w) (getf rs :w) (* 3 padding)))
+                        (fbo-h (+ (* 2 padding)
+                                  (max (getf ls :h) (getf rs :h))))
+                        ;; describe the texture configuration for libovr
+                        (eye-textures
+                          (loop for v in (list (list :pos (vector padding
+                                                                  padding)
+                                                     :size ls)
+                                               (list :pos (vector
+                                                           (+ (* 2 padding)
+                                                              (getf ls :w))
+                                                           padding)
+                                                     :size rs))
+                                collect
+                                `(:texture ,texture
+                                  :render-viewport ,v
+                                  :texture-size (:w ,fbo-w :h ,fbo-h)
+                                  :api :opengl))))
+                   ;; configure the fbo/texture
+                   (format t "left eye tex size = ~s, right = ~s~% total =~sx~a~%"
+                           ls rs fbo-w fbo-h)
+                   (gl:bind-texture :texture-2d texture)
+                   (gl:tex-parameter :texture-2d :texture-wrap-s :repeat)
+                   (gl:tex-parameter :texture-2d :texture-wrap-t :repeat)
+                   (gl:tex-parameter :texture-2d :texture-min-filter :linear)
+                   (gl:tex-parameter :texture-2d :texture-mag-filter :linear)
+                   (gl:tex-image-2d :texture-2d 0 :srgb8-alpha8 fbo-w fbo-h
+                                    0 :rgba :unsigned-int (cffi:null-pointer))
+                   (gl:bind-framebuffer :framebuffer fbo)
+                   (gl:framebuffer-texture-2d :framebuffer :color-attachment0
+                                              :texture-2d texture 0)
+                   (gl:bind-renderbuffer :renderbuffer renderbuffer)
+                   (gl:renderbuffer-storage :renderbuffer :depth-component24
+                                            fbo-w fbo-h)
+                   (gl:framebuffer-renderbuffer :framebuffer :depth-attachment
+                                                :renderbuffer renderbuffer)
+                   (format t "created renderbuffer status = ~s~%"
+                           (gl:check-framebuffer-status :framebuffer))
+                   (gl:bind-framebuffer :framebuffer 0)
 
-            ;; set up a vao containing a simple 'world' geometry
-            (setf count (build-world vao))
+                   ;; set up a vao containing a simple 'world' geometry
+                   (setf count (build-world vao))
 
-            ;; main loop
-            (loop while (glop:dispatch-events win :blocking nil :on-foo nil)
-                  do (draw-frame hmd :eye-render-desc eye-render-desc
-                                     :fbo fbo :eye-textures eye-textures
-                                     :vao vao :count count))
-            ;; clean up
-            (gl:delete-vertex-arrays (list vao))
-            (gl:delete-framebuffers (list fbo))
-            (gl:delete-textures (list texture))
-            (gl:delete-renderbuffers (list renderbuffer))))))))
+                   ;; main loop
+                   (loop while (glop:dispatch-events win :blocking nil :on-foo nil)
+                         do (draw-frame hmd :eye-render-desc eye-render-desc
+                                            :fbo fbo :eye-textures eye-textures
+                                            :vao vao :count count))
+                   ;; clean up
+                   (gl:delete-vertex-arrays (list vao))
+                   (gl:delete-framebuffers (list fbo))
+                   (gl:delete-textures (list texture))
+                   (gl:delete-renderbuffers (list renderbuffer))
+                   (format t "done~%")
+                   (sleep 1))))))
+         (progn
+           (format t "done2~%")
+           (setf *once* nil)
+           (format t "done3 ~s~%" *once*)))))
 
 
 
 #++
+(asdf:load-systems '3b-ovr-sample '3bgl-misc)
+
+#++
 (test-3bovr)
+

@@ -381,7 +381,7 @@
 (defctype frame-timing (:struct frame-timing-))
 
 (defcstruct (eye-render-desc- :class eye-render-desc)
-  (:eye eye-type)
+  (:eye :unsigned-int) ;; eye-type-
   (:fov (:struct fov-port-))
   (:distorted-viewport (:struct recti-))
   (:pixels-per-tan-angle-at-center (:struct vector2f-))
