@@ -1,21 +1,5 @@
 (in-package #:3b-ovr-bindings)
 
-;; constants for get-*
-(defparameter *ovr-key*
-  (alexandria:plist-hash-table '(:user "User" ;; string
-                                 :name "Name" ;; string
-                                 :gender "Gender" ;; string
-                                 :player-height "PlayerHeight" ;; float
-                                 :ipd "IPD" ;; float
-                                 :neck-to-eye-distance "NeckEyeDistance" ;; vec2
-                                 :eye_relief_dial "EyeReliefDial" ;; int
-                                 :eye_to_nose_distance "EyeToNoseDist" ;; float[2]
-                                 :max_eye_to_plate_distance "MaxEyeToPlateDist" ;; float[2]
-                                 :eye_cup "EyeCup" ;; char[16]
-                                 :custom_eye_render "CustomEyeRender" ;; bool
-                                 :camera_position "CenteredFromWorld" ;; double[7]
-                                 :dk2-latency "DK2Latency"
-                                 )))
 
 (defcfun ("ovr_InitializeRenderingShimVersion" initialize-rendering-shim-version) bool
   (requested-minor-version :int))
@@ -432,29 +416,6 @@
 (defcfun ("ovrHmd_DismissHSWDisplay" %ovrhmd::dismiss-hswdisplay) bool
   (hmd hmd))
 
-(define-foreign-type ovr-key ()
-  ()
-  (:actual-type :string)
-  (:simple-parser ovr-key))
-#++
-(defmethod translate-to-foreign (value (type ovr-key))
-  (if (symbolp value)
-      (gethash value *ovr-key* "")
-      value))
-
-(defmethod expand-to-foreign-dyn (value var body (type ovr-key))
-  `(with-foreign-string (,var
-                         ,(cond
-                            ((and (constantp value) (symbolp value))
-                             (gethash value *ovr-key* ""))
-                            ((and (constantp value) (stringp value))
-                             value)
-                            (t
-                             (alexandria:once-only (value)
-                               `(if (symbolp ,value)
-                                    (gethash ,value *ovr-key* "")
-                                    ,value)))))
-     ,@body))
 
 (defcfun ("ovrHmd_GetBool" %ovrhmd::get-bool) bool
   (hmd hmd)
