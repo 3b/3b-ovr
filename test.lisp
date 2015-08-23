@@ -4,8 +4,16 @@
 (in-package #:3bovr-test)
 
 (defclass 3bovr-test (glop:window)
-  ((hmd :reader hmd :initarg :hmd)))
+  ((hmd :reader hmd :initarg :hmd)
+   (world-vao :accessor world-vao)
+   (count :accessor world-count)
+   (hud-vbo :accessor hud-vbo :initform nil)
+   (hud-vao :accessor hud-vao :initform nil)
+   (hud-count :accessor hud-count)
+   (hud-texture :accessor hud-texture)
+   (font :accessor font)))
 
+(defparameter *tex-size* 256)
 
 
 (defmethod glop:on-event ((window 3bovr-test) (event glop:key-event))
@@ -15,14 +23,74 @@
       (:escape
        (glop:push-close-event window))
       (:space
-       (format t "latency = ~{~,,3f ~,,3f ~,,3f ~,,3f ~,,3f~}~%"
+       (format t "latency = ~{~,3,3f ~,3,3f ~,3,3f ~,3,3f ~,3,3f~}~%"
                (%ovr::get-float-array (hmd window) :dk2-latency 5))))))
+
+(defun hud-text (win hmd)
+  (declare (ignorable win))
+  (format nil "fps: ~s~%~
+latency = ~{m2p:~,3,3f ren:~,3,3f tWrp:~,3,3f~%~
+          PostPresent: ~,3,3f Err: ~,3,3f~}"
+          "??"
+          (%ovr::get-float-array
+           hmd :dk2-latency 5)))
 
 (defmethod glop:on-event ((window 3bovr-test) event)
   ;; ignore any other events
   (declare (ignore window event)))
 
+(defun init-hud (win)
+  (let ((vbo (gl:gen-buffer))
+        (vao (hud-vao win)))
+    (setf (hud-vbo win) vbo)
+    (setf (hud-count win) 0)
+    (let ((stride (* 4 4))) ;; x,y,u,v * float
+      (gl:bind-buffer :array-buffer vbo)
+      (%gl:buffer-data :array-buffer (* 0 stride) (cffi:null-pointer)
+                       :static-draw)
+      (gl:bind-vertex-array vao)
+      (gl:enable-client-state :vertex-array)
+      (%gl:vertex-pointer 2 :float stride (cffi:null-pointer))
+      (gl:enable-client-state :texture-coord-array)
+      (%gl:tex-coord-pointer 2 :float stride (* 2 4)))))
 
+(defun update-hud (win string atl)
+  (let* ((strings (split-sequence:split-sequence #\newline string))
+         (count (reduce '+ strings :key 'length))
+        (stride (* (+ 2 2) 6)) ;; x,y,u,v * 2 tris
+        (i 0)
+        (scale 0.01))
+    (gl:bind-buffer :array-buffer (hud-vbo win))
+    (%gl:buffer-data :array-buffer (* count stride 4) (cffi:null-pointer)
+                     :static-draw)
+    (let ((p (%gl:map-buffer :array-buffer :write-only)))
+      (unwind-protect
+           (loop for line in strings
+                 for baseline from 0 by (* 30 scale)
+                 when line
+                   do (flet ((c (x y u v)
+                               (let ((x (* x scale))
+                                     (y (+ baseline (* y scale))))
+                                 (setf (cffi:mem-aref p :float (+ 0 (* i 4))) x
+                                       (cffi:mem-aref p :float (+ 1 (* i 4))) (- y)
+                                       (cffi:mem-aref p :float (+ 2 (* i 4))) v
+                                       (cffi:mem-aref p :float (+ 3 (* i 4))) u)
+                                 (incf i))))
+                        (texatl.cl:do-texatl-string (line
+                                                     x0 y0 x1 y1
+                                                     u0 v0 u1 v1
+                                                     :tex-width *tex-size*
+                                                     :tex-height *tex-size*)
+                                                    atl
+                          (c x0 y0 u0 v0)
+                          (c x0 y1 u0 v1)
+                          (c x1 y1 u1 v1)
+
+                          (c x0 y0 u0 v0)
+                          (c x1 y1 u1 v1)
+                          (c x1 y0 u1 v0)))
+                 finally (setf (hud-count win) i))
+        (%gl:unmap-buffer :array-buffer)))))
 
 (defun build-world (vao)
   (let ((vbo (gl:gen-buffer))
@@ -103,8 +171,7 @@
        (gl:enable-client-state :normal-array)
        (%gl:normal-pointer :float stride (* 8 4))
        (gl:enable-client-state :color-array)
-       (%gl:color-pointer 4 :float stride (* 4 4))
-)
+       (%gl:color-pointer 4 :float stride (* 4 4)))
      (let ((p (%gl:map-buffer :array-buffer :write-only)))
        (unwind-protect
             (loop for i below (fill-pointer buf)
@@ -115,23 +182,34 @@
      (gl:delete-buffers (list vbo))
      count)))
 
-(defun draw-world (vao count)
+(defparameter *w* nil)
+(defun draw-world (win)
+  (setf *w* win)
   (gl:clear :color-buffer :depth-buffer)
-  (gl:disable :texture-2d)
   (gl:enable :framebuffer-srgb
              :line-smooth :blend :point-smooth :depth-test
              :lighting :light0 :color-material)
   (gl:blend-func :src-alpha :one-minus-src-alpha)
   (gl:polygon-mode :front-and-back :fill)
   (gl:light :light0 :position '(100.0 -120.0 -10.0 0.0))
-  (when count
-    (gl:bind-vertex-array vao)
-    (%gl:draw-arrays :triangles 0 count)
-    (gl:bind-vertex-array 0)))
+  (when (world-count win)
+    (gl:disable :texture-2d)
+    (gl:bind-vertex-array (world-vao win))
+    (%gl:draw-arrays :triangles 0 (world-count win)))
+  (gl:point-size 10)
+  (gl:with-pushed-matrix* (:modelview)
+    ;(gl:load-identity)
+    (gl:translate -2 0.2 -2.5)
+    (when (and (hud-count win) (plusp (hud-count win)))
+      (gl:enable :texture-2d)
+      (gl:bind-texture :texture-2d (hud-texture win))
+      (gl:bind-vertex-array (hud-vao win))
+      (%gl:draw-arrays :triangles 0 (hud-count win))))
+    (gl:bind-vertex-array 0))
 
 
-(defun draw-frame (hmd &key eye-render-desc fbo eye-textures
-                         vao count)
+
+(defun draw-frame (hmd &key eye-render-desc fbo eye-textures win)
   (assert (and eye-render-desc fbo eye-textures))
   (let* ((timing (%ovrhmd::begin-frame hmd
                                        ;; don't need to pass index
@@ -219,7 +297,7 @@
                (gl:translate (- (aref position 0))
                              (- (aref position 1))
                              (- (aref position 2)))
-               (draw-world vao count))))
+               (draw-world win))))
       (gl:bind-framebuffer :framebuffer 0)
       ;; pass textures to SDK for distortion, display and vsync
       (%ovr::end-frame hmd head-pose eye-textures))))
@@ -309,10 +387,9 @@
                                             (glop::win32-window-id win)
                                             (cffi:null-pointer) (cffi:null-pointer))
                  ;; configure FBO for offscreen rendering of the eye views
-                 (let* ((vao (gl:gen-vertex-array))
-                        (count 0)
+                 (let* ((vaos (gl:gen-vertex-arrays 2))
                         (fbo (gl:gen-framebuffer))
-                        (texture (gl:gen-texture))
+                        (textures (gl:gen-textures 2))
                         (renderbuffer (gl:gen-renderbuffer))
                         ;; get recommended sizes of eye textures
                         (ls (%ovrhmd::get-fov-texture-size hmd %ovr::+eye-left+
@@ -344,14 +421,18 @@
                                                            padding)
                                                      :size rs))
                                 collect
-                                `(:texture ,texture
+                                `(:texture ,(first textures)
                                   :render-viewport ,v
                                   :texture-size (:w ,fbo-w :h ,fbo-h)
-                                  :api :opengl))))
+                                  :api :opengl)))
+                        (font (car
+                               (conspack:decode-file
+                                (asdf:system-relative-pathname '3b-ovr
+                                                               "font.met")))))
                    ;; configure the fbo/texture
                    (format t "left eye tex size = ~s, right = ~s~% total =~sx~a~%"
                            ls rs fbo-w fbo-h)
-                   (gl:bind-texture :texture-2d texture)
+                   (gl:bind-texture :texture-2d (first textures))
                    (gl:tex-parameter :texture-2d :texture-wrap-s :repeat)
                    (gl:tex-parameter :texture-2d :texture-wrap-t :repeat)
                    (gl:tex-parameter :texture-2d :texture-min-filter :linear)
@@ -360,7 +441,7 @@
                                     0 :rgba :unsigned-int (cffi:null-pointer))
                    (gl:bind-framebuffer :framebuffer fbo)
                    (gl:framebuffer-texture-2d :framebuffer :color-attachment0
-                                              :texture-2d texture 0)
+                                              :texture-2d (first textures) 0)
                    (gl:bind-renderbuffer :renderbuffer renderbuffer)
                    (gl:renderbuffer-storage :renderbuffer :depth-component24
                                             fbo-w fbo-h)
@@ -370,18 +451,50 @@
                            (gl:check-framebuffer-status :framebuffer))
                    (gl:bind-framebuffer :framebuffer 0)
 
-                   ;; set up a vao containing a simple 'world' geometry
-                   (setf count (build-world vao))
+                   ;; load font texture
+                   (gl:bind-texture :texture-2d (second textures))
+                   (gl:tex-parameter :texture-2d :texture-wrap-s :clamp-to-edge)
+                   (gl:tex-parameter :texture-2d :texture-wrap-t :clamp-to-edge)
+                   (gl:tex-parameter :texture-2d :texture-min-filter :linear-mipmap-linear)
+                   (gl:tex-parameter :texture-2d :texture-mag-filter :linear)
+                   (let ((png (png-read:read-png-file
+                               (asdf:system-relative-pathname '3b-ovr
+                                                              "font.png"))))
+                     (gl:tex-image-2d :texture-2d 0 :rgb
+                                      (png-read:width png) (png-read:height png)
+                                      0 :rgb :unsigned-byte
+                                      (make-array (* 3
+                                                     (png-read:width png)
+                                                     (png-read:height png))
+                                                  :element-type
+                                                  '(unsigned-byte 8)
+                                                  :displaced-to
+                                                  (png-read:image-data png)))
+                     (gl:generate-mipmap :texture-2d)
+                     (gl:bind-texture :texture-2d 0))
+                   (setf (hud-texture win) (second textures))
+
+                   ;; set up a vao containing a simple 'world' geometry,
+                   ;; and hud geometry
+                   (setf (world-vao win) (first vaos)
+                         (world-count win) (build-world (first vaos))
+                         (hud-vao win) (second vaos))
+                   (init-hud win)
 
                    ;; main loop
-                   (loop while (glop:dispatch-events win :blocking nil :on-foo nil)
+                   (loop while (glop:dispatch-events win :blocking nil
+                                                         :on-foo nil)
+                         when font
+                         do (update-hud win (hud-text win hmd)
+                                          font)
                          do (draw-frame hmd :eye-render-desc eye-render-desc
-                                            :fbo fbo :eye-textures eye-textures
-                                            :vao vao :count count))
+                                            :fbo fbo
+                                            :eye-textures eye-textures
+                                            :win win))
                    ;; clean up
-                   (gl:delete-vertex-arrays (list vao))
+                   (gl:delete-vertex-arrays vaos)
                    (gl:delete-framebuffers (list fbo))
-                   (gl:delete-textures (list texture))
+                   (gl:delete-textures textures)
                    (gl:delete-renderbuffers (list renderbuffer))
                    (format t "done~%")
                    (sleep 1))))))
@@ -393,8 +506,16 @@
 
 
 #++
-(asdf:load-systems '3b-ovr-sample '3bgl-misc)
+(asdf:load-systems '3b-ovr-sample)
 
 #++
 (test-3bovr)
 
+#++
+(let ((*default-pathname-defaults* (asdf:system-relative-pathname '3b-ovr "./")))
+  (texatl:make-font-atlas-files "font.png" "font.met" 256 256
+                                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+                                16
+                                :dpi 128
+                                :padding 4
+                                :string "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,;:?!@#$%^&*()-_<>'\"$[]= "))
