@@ -225,9 +225,9 @@
     #+windows
     (progn
       (setf (foreign-slot-value config 'gl-config-data :window)
-            (or window (cffi:null-pointer)))
+            (or win-window (cffi:null-pointer)))
       (setf (foreign-slot-value config 'gl-config-data :dc)
-            (or dc (cffi:null-pointer))))
+            (or win-dc (cffi:null-pointer))))
     #+linux
     (setf (foreign-slot-value config 'gl-config-data :x-display)
           (or linux-display (cffi:null-pointer)))
