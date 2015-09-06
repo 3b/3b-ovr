@@ -209,7 +209,7 @@ latency = ~{m2p:~,3,3f ren:~,3,3f tWrp:~,3,3f~%~
 
 
 
-(defun draw-frame (hmd &key eye-render-desc fbo eye-textures win)
+(defun draw-frame (hmd &key fbo eye-layer win)
   (assert (and eye-render-desc fbo eye-textures))
   (let* ((timing (%ovrhmd::begin-frame hmd
                                        ;; don't need to pass index
@@ -252,6 +252,11 @@ latency = ~{m2p:~,3,3f ren:~,3,3f tWrp:~,3,3f~%~
            (gl:clear-color 0.5 0.1 0.1 1))))
       ;; draw view from each eye
       (gl:bind-framebuffer :framebuffer fbo)
+      (gl:framebuffer-texture-2d :framebuffer :color-attachment0
+                                 :texture-2d
+                                 (texture-set-next-texture texture-set)
+                                 0)
+
       (loop
         for index below 2
         ;; sdk specifies preferred drawing order, so it can predict
@@ -312,196 +317,163 @@ latency = ~{m2p:~,3,3f ren:~,3,3f tWrp:~,3,3f~%~
   ;; initialize library
   (setf *once* t)
   (unwind-protect
-       (%ovr::with-ovr ok (:debug nil :timeout-ms 500)
+       (%ovr::with-ovr ok (:debug t :timeout-ms 500)
          (unless ok
            (format t "couldn't initialize libovr~%")
            (return-from test-3bovr nil))
          ;; print out some info
          (format t "version: ~s~%" (%ovr::get-version-string))
          (format t "time = ~,3f~%" (%ovr::get-time-in-seconds))
-         (format t "detect: ~s HMDs available~%" (%ovrhmd::detect))
+         #++(format t "detect: ~s HMDs available~%" (%ovrhmd::detect))
          ;; try to open an HMD
-         (%ovr::with-hmd (hmd)
+         (%ovr::with-hmd (hmd luid props)
            (unless hmd
              (format t "couldn't open hmd 0~%")
-             (format t "error = ~s~%"(%ovrhmd::get-last-error (cffi:null-pointer)))
+             (format t "error = ~s~%" (%ovr::get-last-error))
              (return-from test-3bovr nil))
            ;; print out info about the HMD
-           (let ((props (%ovr::dump-hmd-to-plist hmd)) ;; decode the HMD struct
-                 w h x y)
-             (format t "got hmd ~{~s ~s~^~%        ~}~%" props)
-             (format t "enabled caps = ~s~%" (%ovrhmd::get-enabled-caps hmd))
-             (%ovrhmd::set-enabled-caps hmd '(:low-persistence
-                                              :dynamic-prediction))
-             (format t "             -> ~s~%" (%ovrhmd::get-enabled-caps hmd))
-             ;; turn on the tracking
-             (%ovrhmd::configure-tracking hmd
-                                          ;; desired tracking capabilities
-                                          '(:orientation :mag-yaw-correction
-                                            :position)
-                                          ;; required tracking capabilities
-                                          nil)
-             ;; figure out where to put the window
-             (setf w (getf (getf props :resolution) :w))
-             (setf h (getf (getf props :resolution) :h))
-             (setf x (aref (getf props :window-pos) 0))
-             (setf y (aref (getf props :window-pos) 1))
-             #+linux
-             (when (eq (getf props :type) :dk2)
-               ;; sdk is reporting resolution as 1920x1080 when screen is
-               ;; set to 1080x1920 in twinview?
-               (format t "overriding resolution from ~sx~s to ~sx~s~%"
-                       w h 1080 1920)
-               (setf w 1080 h 1920))
-             ;; create window
-             (format t "opening ~sx~s window at ~s,~s~%" w h x y)
-             (glop:with-window (win
-                                "3bovr test window"
-                                w h
-                                :x x :y y
-                                :win-class '3bovr-test
-                                :fullscreen t
-                                :depth-size 16)
-               (setf (slot-value win 'hmd) hmd)
-               ;; configure rendering and save eye render params
-               ;; todo: linux/mac versions
-               (%ovr::with-configure-rendering eye-render-desc
-                   (hmd
-                    ;; specify window size since defaults don't match on
-                    ;; linux sdk with non-rotated dk2
-                    :back-buffer-size (list :w w :h h)
-                    ;; optional: specify which window/DC to draw into
-                    ;;#+linux :linux-display
-                    ;;#+linux(glop:x11-window-display win)
-                    ;;#+windows :win-window
-                    ;;#+windows(glop::win32-window-id win)
-                    ;;#+windows :win-dc
-                    ;;#+windows (glop::win32-window-dc win)
-                    :distortion-caps
-                    '(:time-warp :vignette
-                      :srgb :overdrive :hq-distortion
-                      #+linux :linux-dev-fullscreen))
-                 ;; attach libovr runtime to window
-                 #+windows
-                 (%ovrhmd::attach-to-window hmd
-                                            (glop::win32-window-id win)
-                                            (cffi:null-pointer) (cffi:null-pointer))
-                 ;; configure FBO for offscreen rendering of the eye views
-                 (let* ((vaos (gl:gen-vertex-arrays 2))
-                        (fbo (gl:gen-framebuffer))
-                        (textures (gl:gen-textures 2))
-                        (renderbuffer (gl:gen-renderbuffer))
-                        ;; get recommended sizes of eye textures
-                        (ls (%ovrhmd::get-fov-texture-size hmd %ovr::+eye-left+
-                                                           ;; use default fov
-                                                           (getf (elt eye-render-desc
-                                                                      %ovr::+eye-left+)
-                                                                 :fov)
-                                                           ;; and no scaling
-                                                           1.0))
-                        (rs (%ovrhmd::get-fov-texture-size hmd %ovr::+eye-right+
-                                                           (getf (elt eye-render-desc
-                                                                      %ovr::+eye-right+)
-                                                                 :fov)
-                                                           1.0))
-                        ;; put space between eyes to avoid interference
-                        (padding 16)
-                        ;; storing both eyes in 1 texture, so figure out combined size
-                        (fbo-w (+ (getf ls :w) (getf rs :w) (* 3 padding)))
-                        (fbo-h (+ (* 2 padding)
-                                  (max (getf ls :h) (getf rs :h))))
-                        ;; describe the texture configuration for libovr
-                        (eye-textures
-                          (loop for v in (list (list :pos (vector padding
-                                                                  padding)
-                                                     :size ls)
-                                               (list :pos (vector
-                                                           (+ (* 2 padding)
-                                                              (getf ls :w))
-                                                           padding)
-                                                     :size rs))
-                                collect
-                                `(:texture ,(first textures)
-                                  :render-viewport ,v
-                                  :texture-size (:w ,fbo-w :h ,fbo-h)
-                                  :api :opengl)))
-                        (font (car
-                               (conspack:decode-file
-                                (asdf:system-relative-pathname '3b-ovr
-                                                               "font.met")))))
-                   ;; configure the fbo/texture
-                   (format t "left eye tex size = ~s, right = ~s~% total =~sx~a~%"
-                           ls rs fbo-w fbo-h)
-                   (gl:bind-texture :texture-2d (first textures))
-                   (gl:tex-parameter :texture-2d :texture-wrap-s :repeat)
-                   (gl:tex-parameter :texture-2d :texture-wrap-t :repeat)
-                   (gl:tex-parameter :texture-2d :texture-min-filter :linear)
-                   (gl:tex-parameter :texture-2d :texture-mag-filter :linear)
-                   (gl:tex-image-2d :texture-2d 0 :srgb8-alpha8 fbo-w fbo-h
-                                    0 :rgba :unsigned-int (cffi:null-pointer))
-                   (gl:bind-framebuffer :framebuffer fbo)
-                   (gl:framebuffer-texture-2d :framebuffer :color-attachment0
-                                              :texture-2d (first textures) 0)
-                   (gl:bind-renderbuffer :renderbuffer renderbuffer)
-                   (gl:renderbuffer-storage :renderbuffer :depth-component24
-                                            fbo-w fbo-h)
-                   (gl:framebuffer-renderbuffer :framebuffer :depth-attachment
-                                                :renderbuffer renderbuffer)
-                   (format t "created renderbuffer status = ~s~%"
-                           (gl:check-framebuffer-status :framebuffer))
-                   (gl:bind-framebuffer :framebuffer 0)
+           (format t "got hmd ~{~s ~s~^~%        ~}~%" props)
+           (format t "enabled caps = ~s~%" (%ovr::get-enabled-caps hmd))
+           #++(%ovr::set-enabled-caps hmd '(:low-persistence
+                                            :dynamic-prediction))
+           (format t "             -> ~s~%" (%ovr::get-enabled-caps hmd))
+           ;; turn on the tracking
+           (%ovr::configure-tracking hmd
+                                     ;; desired tracking capabilities
+                                     '(:orientation :mag-yaw-correction
+                                       :position)
+                                     ;; required tracking capabilities
+                                     nil)
+           (format t "tracking state = ~{~s ~s~^~%                 ~}~%"
+                   (%ovr::get-tracking-state hmd))
+           ;; create window
+           (glop:with-window (win
+                              "3bovr test window"
+                              1600 900
+                              :win-class '3bovr-test
+                              :fullscreen t
+                              :depth-size 16)
+             (setf (slot-value win 'hmd) hmd)
+             (format t "openend window, gl = ~a / ~a~%"
+                     (gl:get* :vendor) (gl:get* :renderer))
+             ;; configure FBO for offscreen rendering of the eye views
+             (let* ((vaos (gl:gen-vertex-arrays 2))
+                    (fbo (gl:gen-framebuffer))
+                    (textures (gl:gen-textures 2))
+                    (renderbuffer (gl:gen-renderbuffer))
+                    (default-fov (getf props :default-eye-fov))
+                    ;; get recommended sizes of eye textures
+                    (ls (%ovr::get-fov-texture-size hmd %ovr::+eye-left+
+                                                    ;; use default fov
+                                                    (elt default-fov
+                                                         %ovr::+eye-left+)
+                                                    ;; and no scaling
+                                                    1.0))
+                    (rs (%ovr::get-fov-texture-size hmd %ovr::+eye-right+
+                                                    (elt default-fov
+                                                         %ovr::+eye-right+)
+                                                    1.0))
+                    ;; put space between eyes to avoid interference
+                    (padding 16)
+                    ;; storing both eyes in 1 texture, so figure out combined size
+                    (fbo-w (+ (getf ls :w) (getf rs :w) (* 3 padding)))
+                    (fbo-h (+ (* 2 padding)
+                              (max (getf ls :h) (getf rs :h))))
+                    ;; describe the texture configuration for libovr
+                    (eye-layer
+                      `(:render-pose (:position #(0.0 0.0 0.0)
+                                      :orientation #(0.0 0.0 0.0 0.0))
+                        :fov ,default-fov
+                        :viewport #((:pos #(,padding , padding)
+                                     :size ,ls)
+                                    (:pos #(,(+ (* 2 padding)
+                                              (getf ls :w))
+                                            ,padding)
+                                     :size ,rs))
+                        :color-texture #(,(cffi:null-pointer)
+                                         ,(cffi:null-pointer))
+                        :flags (:high-quality :texture-origin-at-bottom-left)
+                        :type :eye-fov))
+                      (font (car
+                             (conspack:decode-file
+                              (asdf:system-relative-pathname '3b-ovr
+                                                             "font.met")))))
+               (%ovr::with-swap-texture-set texture-set (hmd fbo-w fbo-h)
+                 (setf (elt (getf eye-layer :color-texture) 1)
+                       texture-set)
+                 (format t "created texture set ~s~%" texture-set)
+                 (format t "  = ~s / ~s~%"
+                         (%ovr::swap-texture-set-index texture-set)
+                         (%ovr::swap-texture-set-count texture-set))
+                 (format t "  = ~s~%"
+                         (%ovr::swap-texture-set-textures texture-set))
 
-                   ;; load font texture
-                   (gl:bind-texture :texture-2d (second textures))
-                   (gl:tex-parameter :texture-2d :texture-wrap-s :clamp-to-edge)
-                   (gl:tex-parameter :texture-2d :texture-wrap-t :clamp-to-edge)
-                   (gl:tex-parameter :texture-2d :texture-min-filter :linear-mipmap-linear)
-                   (gl:tex-parameter :texture-2d :texture-mag-filter :linear)
-                   (let ((png (png-read:read-png-file
-                               (asdf:system-relative-pathname '3b-ovr
-                                                              "font.png"))))
-                     (gl:tex-image-2d :texture-2d 0 :rgb
-                                      (png-read:width png) (png-read:height png)
-                                      0 :rgb :unsigned-byte
-                                      (make-array (* 3
-                                                     (png-read:width png)
-                                                     (png-read:height png))
-                                                  :element-type
-                                                  '(unsigned-byte 8)
-                                                  :displaced-to
-                                                  (png-read:image-data png)))
-                     (gl:generate-mipmap :texture-2d)
-                     (gl:bind-texture :texture-2d 0))
-                   (setf (hud-texture win) (second textures))
+                 ;; configure the fbo/texture
+                 (format t "left eye tex size = ~s, right = ~s~% total =~sx~a~%"
+                         ls rs fbo-w fbo-h)
+                 (gl:bind-framebuffer :framebuffer fbo)
+                 ;; we will bind the texture later, since we have to cycle
+                 ;; through the allocated textures in the texture set
+                 ;; todo: preallocate an fbo per texture in texture-set?
+                 (gl:bind-renderbuffer :renderbuffer renderbuffer)
+                 (gl:renderbuffer-storage :renderbuffer :depth-component24
+                                          fbo-w fbo-h)
+                 (gl:framebuffer-renderbuffer :framebuffer :depth-attachment
+                                              :renderbuffer renderbuffer)
+                 (format t "created renderbuffer status = ~s~%"
+                         (gl:check-framebuffer-status :framebuffer))
+                 (gl:bind-framebuffer :framebuffer 0)
 
-                   ;; set up a vao containing a simple 'world' geometry,
-                   ;; and hud geometry
-                   (setf (world-vao win) (first vaos)
-                         (world-count win) (build-world (first vaos))
-                         (hud-vao win) (second vaos))
-                   (init-hud win)
+                 ;; load font texture
+                 (gl:bind-texture :texture-2d (second textures))
+                 (gl:tex-parameter :texture-2d :texture-wrap-s :clamp-to-edge)
+                 (gl:tex-parameter :texture-2d :texture-wrap-t :clamp-to-edge)
+                 (gl:tex-parameter :texture-2d :texture-min-filter :linear-mipmap-linear)
+                 (gl:tex-parameter :texture-2d :texture-mag-filter :linear)
+                 (let ((png (png-read:read-png-file
+                             (asdf:system-relative-pathname '3b-ovr
+                                                            "font.png"))))
+                   (gl:tex-image-2d :texture-2d 0 :rgb
+                                    (png-read:width png) (png-read:height png)
+                                    0 :rgb :unsigned-byte
+                                    (make-array (* 3
+                                                   (png-read:width png)
+                                                   (png-read:height png))
+                                                :element-type
+                                                '(unsigned-byte 8)
+                                                :displaced-to
+                                                (png-read:image-data png)))
+                   (gl:generate-mipmap :texture-2d)
+                   (gl:bind-texture :texture-2d 0))
+                 (setf (hud-texture win) (second textures))
 
-                   ;; main loop
-                   (loop while (glop:dispatch-events win :blocking nil
-                                                         :on-foo nil)
-                         when font
+                 ;; set up a vao containing a simple 'world' geometry,
+                 ;; and hud geometry
+                 (setf (world-vao win) (first vaos)
+                       (world-count win) (build-world (first vaos))
+                       (hud-vao win) (second vaos))
+                 (init-hud win)
+
+                 ;; main loop
+                 (loop while (glop:dispatch-events win :blocking nil
+                                                       :on-foo nil)
+                       when font
                          do (update-hud win (hud-text win hmd)
-                                          font)
-                         do (draw-frame hmd :eye-render-desc eye-render-desc
-                                            :fbo fbo
-                                            :eye-textures eye-textures
-                                            :win win))
-                   ;; clean up
-                   (gl:delete-vertex-arrays vaos)
-                   (gl:delete-framebuffers (list fbo))
-                   (gl:delete-textures textures)
-                   (gl:delete-renderbuffers (list renderbuffer))
-                   (format t "done~%")
-                   (sleep 1))))))
-         (progn
-           (format t "done2~%")
-           (setf *once* nil)
-           (format t "done3 ~s~%" *once*)))))
+                                        font)
+                       #+do (draw-frame hmd :fbo fbo
+                                          :eye-layer eye-layer
+                                          :win win))
+                 ;; clean up
+                 (gl:delete-vertex-arrays vaos)
+                 (gl:delete-framebuffers (list fbo))
+                 (gl:delete-textures textures)
+                 (gl:delete-renderbuffers (list renderbuffer))
+                 (format t "done~%")
+                 (sleep 1))))))
+    (progn
+      (format t "done2~%")
+      (setf *once* nil)
+      (format t "done3 ~s~%" *once*))))
 
 
 
