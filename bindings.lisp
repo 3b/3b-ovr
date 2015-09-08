@@ -9,21 +9,22 @@
 
 
 (defcfun ("ovr_Initialize" %initialize) checked-result
-  (params (:pointer init-params)))
+  (params (:pointer init-params-)))
 
 (defun initialize (&key debug no-debug minor-version timeout-ms log-callback
                      server-optional)
-  (with-foreign-object (ip 'init-params)
-    (setf (foreign-slot-value ip 'init-params 'flags)
+  (with-foreign-object (ip '(:struct init-params-))
+    (setf (foreign-slot-value ip '(:struct init-params-) 'flags)
           (remove nil (list (when debug :debug)
                             (when minor-version :request-version)
                             (when server-optional :server-optional)
                             (when no-debug :force-no-debug))))
-    (setf (foreign-slot-value ip 'init-params 'requested-minor-version)
+    (setf (foreign-slot-value ip '(:struct init-params-)
+                              'requested-minor-version)
           (or minor-version 0))
-    (setf (foreign-slot-value ip 'init-params 'log-callback)
+    (setf (foreign-slot-value ip '(:struct init-params-) 'log-callback)
           (or log-callback (null-pointer)))
-    (setf (foreign-slot-value ip 'init-params 'connection-timeout-ms)
+    (setf (foreign-slot-value ip '(:struct init-params-) 'connection-timeout-ms)
           (or timeout-ms 0))
     (%initialize ip)))
 
@@ -60,6 +61,7 @@
 (defcfun ("ovr_Create" %create) checked-result
   (hmd (:pointer hmd))
   (luid (:pointer (:struct graphics-luid-))))
+
 
 (defcfun ("ovr_GetHmdDesc" get-hmd-desc) (:struct %ovrhmd::desc-)
   (hmd hmd))
@@ -145,8 +147,8 @@
 
 (defcfun ("ovr_ConfigureTracking" configure-tracking) checked-result
   (hmd hmd)
-  (requested-tracking-caps tracking-caps)
-  (required-tracking-caps tracking-caps))
+  (requested-tracking-caps tracking-caps-)
+  (required-tracking-caps tracking-caps-))
 
 (defcfun ("ovr_RecenterPose" recenter-pose) :void
   (hmd hmd))
@@ -186,7 +188,7 @@
 (defcfun ("ovr_GetFovTextureSize" get-fov-texture-size) (:struct sizei-)
   (hmd hmd)
   (eye :unsigned-int) ; eye-type
-  (fov fov-port)
+  (fov (:struct fov-port-))
   (pixels-per-display-pixel :float))
 
 (defcfun ("ovr_GetRenderDesc" get-render-desc) (:struct eye-render-desc-)
@@ -215,37 +217,37 @@
   (hmd hmd))
 
 
-(defcfun ("ovr_GetBool" %ovrhmd::get-bool) bool
+(defcfun ("ovr_GetBool" %ovr::get-bool) bool
   (hmd hmd)
   (property-name ovr-key)
   (default-val bool))
 
-(defcfun ("ovr_SetBool" %ovrhmd::set-bool) bool
+(defcfun ("ovr_SetBool" %ovr::set-bool) bool
   (hmd hmd)
   (property-name ovr-key)
   (value bool))
 
-(defcfun ("ovr_GetInt" %ovrhmd::get-int) :int
+(defcfun ("ovr_GetInt" %ovr::get-int) :int
   (hmd hmd)
   (property-name ovr-key)
   (default-val :int))
 
-(defcfun ("ovr_SetInt" %ovrhmd::set-int) bool
+(defcfun ("ovr_SetInt" %ovr::set-int) bool
   (hmd hmd)
   (property-name ovr-key)
   (value :int))
 
-(defcfun ("ovr_GetFloat" %ovrhmd::get-float) :float
+(defcfun ("ovr_GetFloat" %ovr::get-float) :float
   (hmd hmd)
   (property-name ovr-key)
   (default-val :float))
 
-(defcfun ("ovr_SetFloat" %ovrhmd::set-float) bool
+(defcfun ("ovr_SetFloat" %ovr::set-float) bool
   (hmd hmd)
   (property-name ovr-key)
   (value :float))
 
-(defcfun ("ovr_GetFloatArray" %ovrhmd::%get-float-array) :unsigned-int
+(defcfun ("ovr_GetFloatArray" %ovr::%get-float-array) :unsigned-int
   (hmd hmd)
   (property-name ovr-key)
   (values (:pointer :float))
@@ -253,25 +255,25 @@
 
 (defun get-float-array (hmd key count)
   (cffi:with-foreign-object (p :float count)
-    (let ((w (%ovrhmd::%get-float-array hmd key p count)))
+    (let ((w (%ovr::%get-float-array hmd key p count)))
       ;; possibly should return a (typed?) vector?
       ;; possibly should return COUNT values even if fewer are returned?
       ;;   (if so, should return W as 2nd value)
       (loop for i below w
             collect (mem-aref p :float i)))))
 
-(defcfun ("ovr_SetFloatArray" %ovrhmd::set-float-array) bool
+(defcfun ("ovr_SetFloatArray" %ovr::set-float-array) bool
   (hmd hmd)
   (property-name ovr-key)
   (values (:pointer :float))
   (array-size :unsigned-int))
 
-(defcfun ("ovr_GetString" %ovrhmd::get-string) :string
+(defcfun ("ovr_GetString" %ovr::get-string) :string
   (hmd hmd)
   (property-name ovr-key)
   (default-val :string))
 
-(defcfun ("ovr_SetString" %ovrhmd::set-string) bool
+(defcfun ("ovr_SetString" %ovr::set-string) bool
   (hmddesc hmd)
   (property-name ovr-key)
   (value :string))
@@ -281,7 +283,7 @@
 
 
 #++
-(defcfun ("ovr_ConfigureRendering" %ovrhmd::configure-rendering)  bool
+(defcfun ("ovr_ConfigureRendering" %ovr::configure-rendering)  bool
   (hmd hmd)
   (api-config (:pointer render-api-config))
   (distortion-caps distortion-caps)
@@ -306,15 +308,15 @@
   (declare (ignorable win-dc win-window linux-display))
   (setf back-buffer-size
         (or back-buffer-size
-            (foreign-slot-value hmd '%ovrhmd::desc 'resolution)
-            #++(mem-ref (foreign-slot-value hmd '%ovrhmd::desc 'resolution)
+            (foreign-slot-value hmd '%ovr::desc 'resolution)
+            #++(mem-ref (foreign-slot-value hmd '%ovr::desc 'resolution)
                         '(:struct sizei-))))
   (setf eye-fov-in
         (or eye-fov-in
             (list
-             (mem-aref (foreign-slot-value hmd '%ovrhmd::desc 'default-eye-fov)
+             (mem-aref (foreign-slot-value hmd '%ovr::desc 'default-eye-fov)
                        '(:struct fov-port-) 0)
-             (mem-aref (foreign-slot-value hmd '%ovrhmd::desc 'default-eye-fov)
+             (mem-aref (foreign-slot-value hmd '%ovr::desc 'default-eye-fov)
                        '(:struct fov-port-) 1))))
   (format t "~&configure rendering, fov=-~s~%" eye-fov-in)
 
@@ -345,12 +347,12 @@
             (or eye-fov-in (cffi:null-pointer))
             out)
     (print (loop for i below 8 collect (mem-aref fov :float i)))
-    (print (%ovrhmd::get-last-error hmd))
+    (print (%ovr::get-last-error hmd))
     (print
-     (%ovrhmd::configure-rendering hmd config distortion-caps
+     (%ovr::configure-rendering hmd config distortion-caps
                                    fov
                                    out))
-    (print (%ovrhmd::get-last-error hmd))
+    (print (%ovr::get-last-error hmd))
     (format t "~&got desc ~s~%"
             (loop for i below 2
                   collect (cffi:mem-aref out '(:struct eye-render-desc-) i)))
@@ -384,17 +386,17 @@
       `(unwind-protect
             (let ((,desc-var (configure-rendering ,hmd ,@args)))
               ,@body)
-         (%ovrhmd::configure-rendering ,hmd (cffi:null-pointer) 0
+         (%ovr::configure-rendering ,hmd (cffi:null-pointer) 0
                                        (cffi:null-pointer)
                                        (cffi:null-pointer))))))
 
 #++
-(defcfun ("ovr_BeginFrame" %ovrhmd::begin-frame) (:struct frame-timing-)
+(defcfun ("ovr_BeginFrame" %ovr::begin-frame) (:struct frame-timing-)
   (hmd hmd)
   (frame-index :unsigned-int))
 
 #++
-(defcfun ("ovr_EndFrame" %ovrhmd::%end-frame) :void
+(defcfun ("ovr_EndFrame" %ovr::%end-frame) :void
   (hmd hmd)
   (render-pose (:pointer posef)) ;; posef :count 2
   (eye-texture (:pointer texture))) ;; texture :count 2
@@ -421,10 +423,10 @@
                             (* i #. (foreign-type-size '(:struct texture-x))))
                    (elt eye-textures i)))
     (without-fp-traps
-     (%ovrhmd::%end-frame hmd poses textures))))
+     (%ovr::%end-frame hmd poses textures))))
 
 #++
-(defcfun ("ovr_GetEyePoses" %ovrhmd::%get-eye-poses) :void
+(defcfun ("ovr_GetEyePoses" %ovr::%get-eye-poses) :void
   (hmd hmd)
   (frame-index :unsigned-int)
   (hmd-to-eye-view-offset (:pointer vector3f)) ;; vector3f :count 2
@@ -438,18 +440,18 @@
     (loop for i below 2
           for o = (elt hmd-to-eye-view-offsets i)
           do (setf (mem-aref offsets '(:struct vector3f-) i) o))
-    (%ovrhmd::%get-eye-poses hmd frame-index offsets poses state)
+    (%ovr::%get-eye-poses hmd frame-index offsets poses state)
     (values (loop for i below 2
                   collect  (mem-aref poses '(:struct posef-) i))
             (mem-ref state '(:struct tracking-state-)))))
 
 #++
-(defcfun ("ovr_GetHmdPosePerEye" %ovrhmd::get-hmd-pose-per-eye) (:struct posef-)
+(defcfun ("ovr_GetHmdPosePerEye" %ovr::get-hmd-pose-per-eye) (:struct posef-)
   (hmd hmd)
   (eye eye-type))
 
 #++
-(defcfun ("ovr_CreateDistortionMesh" %ovrhmd::create-distortion-mesh)
+(defcfun ("ovr_CreateDistortionMesh" %ovr::create-distortion-mesh)
     :char ;;bool
   (hmd hmd)
   (eye-type eye-type)
@@ -458,7 +460,7 @@
   (mesh-data (:pointer distortion-mesh)))
 
 #++
-(defcfun ("ovr_CreateDistortionMeshDebug" %ovrhmd::create-distortion-mesh-debug) :char ;;bool
+(defcfun ("ovr_CreateDistortionMeshDebug" %ovr::create-distortion-mesh-debug) :char ;;bool
   (hmddesc hmd)
   (eye-type eye-type)
   (fov fov-port)
@@ -466,34 +468,34 @@
   (mesh-data (:pointer distortion-mesh))
   (debug-eye-relief-override-in-metres :float))
 #++
-(defcfun ("ovr_DestroyDistortionMesh" %ovrhmd::destroy-distortion-mesh) :void
+(defcfun ("ovr_DestroyDistortionMesh" %ovr::destroy-distortion-mesh) :void
   (mesh-data (:pointer distortion-mesh)))
 #++
-(defcfun ("ovr_GetRenderScaleAndOffset" %ovrhmd::get-render-scale-and-offset) :void
+(defcfun ("ovr_GetRenderScaleAndOffset" %ovr::get-render-scale-and-offset) :void
   (fov fov-port)
   (texture-size sizei)
   (render-viewport recti)
   (uv-scale-offset-out (:pointer vector2f))) ;; vector2f :count 2
 
 
-#++(defcfun ("ovr_BeginFrameTiming" %ovrhmd::begin-frame-timing) (:struct frame-timing-)
+#++(defcfun ("ovr_BeginFrameTiming" %ovr::begin-frame-timing) (:struct frame-timing-)
   (hmd hmd)
   (frame-index :unsigned-int))
 #++
-(defcfun ("ovr_EndFrameTiming" %ovrhmd::end-frame-timing) :void
+(defcfun ("ovr_EndFrameTiming" %ovr::end-frame-timing) :void
   (hmd hmd))
 #++
-(defcfun ("ovr_ResetFrameTiming" %ovrhmd::reset-frame-timing) :void
+(defcfun ("ovr_ResetFrameTiming" %ovr::reset-frame-timing) :void
   (hmd hmd)
   (frame-index :unsigned-int))
 #++
-(defcfun ("ovr_GetEyeTimewarpMatrices" %ovrhmd::get-eye-timewarp-matrices) :void
+(defcfun ("ovr_GetEyeTimewarpMatrices" %ovr::get-eye-timewarp-matrices) :void
   (hmd hmd)
   (eye eye-type)
   (render-pose posef)
   (twm-out (:pointer matrix4f))) ;; matrix4f :count 2
 #++
-(defcfun ("ovr_GetEyeTimewarpMatricesDebug" %ovrhmd::get-eye-timewarp-matrices-debug) :void
+(defcfun ("ovr_GetEyeTimewarpMatricesDebug" %ovr::get-eye-timewarp-matrices-debug) :void
   (hmddesc hmd)
   (eye eye-type)
   (render-pose posef)
@@ -502,36 +504,36 @@
   (debug-timing-offset-in-seconds :double))
 
 #++
-(defcfun ("ovr_ProcessLatencyTest" %ovrhmd::process-latency-test) bool
+(defcfun ("ovr_ProcessLatencyTest" %ovr::process-latency-test) bool
   (hmd hmd)
   (rgb-color-out (:pointer :unsigned-char))) ;; :unsigned-char :count 3
 
 #++
-(defcfun ("ovr_GetLatencyTestResult" %ovrhmd::get-latency-test-result) (:pointer
+(defcfun ("ovr_GetLatencyTestResult" %ovr::get-latency-test-result) (:pointer
                                                                            :char)
   (hmd hmd))
 
 #++
-(defcfun ("ovr_GetLatencyTest2DrawColor" %ovrhmd::get-latency-test2draw-color) bool
+(defcfun ("ovr_GetLatencyTest2DrawColor" %ovr::get-latency-test2draw-color) bool
   (hmddesc hmd)
   (rgb-color-out (:pointer :unsigned-char))) ;; :unsigned-char :count 3
 #++
-(defcfun ("ovr_GetHSWDisplayState" %ovrhmd::get-hswdisplay-state) :void
+(defcfun ("ovr_GetHSWDisplayState" %ovr::get-hswdisplay-state) :void
   (hmd hmd)
   (has-warning-state (:pointer hswdisplay-state)))
 
 #++
-(defcfun ("ovr_DismissHSWDisplay" %ovrhmd::dismiss-hswdisplay) bool
+(defcfun ("ovr_DismissHSWDisplay" %ovr::dismiss-hswdisplay) bool
   (hmd hmd))
 
 #++
-(defcfun ("ovr_StartPerfLog" %ovrhmd::start-perf-log) bool
+(defcfun ("ovr_StartPerfLog" %ovr::start-perf-log) bool
   (hmd hmd)
   (file-name :string)
   (user-data1 :string))
 
 #++
-(defcfun ("ovr_StopPerfLog" %ovrhmd::stop-perf-log) bool
+(defcfun ("ovr_StopPerfLog" %ovr::stop-perf-log) bool
   (hmd hmd))
 #++
 (defcfun ("ovrMatrix4f_Projection" %matrix4f-projection) (:struct matrix4f-)

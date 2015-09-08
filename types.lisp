@@ -186,20 +186,20 @@
                      :initial-contents (list (cffi:mem-aref ,p :int 0)
                                              (cffi:mem-aref ,p :int 1))))
 
-(defctype vector2i (:struct vector2i-))
+;(defctype vector2i (:struct vector2i-))
 
 ;; not sure if this should be same as vector* or not?
 (defcstruct sizei-
   (:w :int)
   (:h :int))
 
-(defctype sizei (:struct sizei-))
+;(defctype sizei (:struct sizei-))
 
 (defcstruct recti-
   (:pos (:struct vector2i-))
   (:size (:struct sizei-)))
 
-(defctype recti (:struct recti-))
+;(defctype recti (:struct recti-))
 
 (defcstruct (quatf- :class quatf)
   (x :float)
@@ -207,7 +207,7 @@
   (z :float)
   (w :float))
 
-(defctype quatf (:struct quatf-))
+;(defctype quatf (:struct quatf-))
 
 (define-cffi-translators (p v (:struct quatf-) quatf)
   :write `(etypecase ,v
@@ -232,7 +232,7 @@
   (x :float)
   (y :float))
 
-(defctype vector2f (:struct vector2f-))
+;(defctype vector2f (:struct vector2f-))
 
 (define-cffi-translators (p v (:struct vector2f-) vector2f)
   :write `(etypecase ,v
@@ -252,7 +252,7 @@
   (:y :float)
   (:z :float))
 
-(defctype vector3f (:struct vector3f-))
+;(defctype vector3f (:struct vector3f-))
 
 (define-cffi-translators (p v (:struct vector3f-) vector3f)
   :write `(etypecase ,v
@@ -272,7 +272,7 @@
 (defcstruct (matrix4f- :class matrix4f)
   (m :float :count 16))
 
-(defctype matrix4f (:struct matrix4f-))
+;(defctype matrix4f (:struct matrix4f-))
 
 (define-cffi-translators (p v (:struct matrix4f-) matrix4f)
   :write `(etypecase ,v
@@ -294,7 +294,7 @@
   (:orientation (:struct quatf-))
   (:position (:struct vector3f-)))
 
-(defctype posef (:struct posef-))
+;(defctype posef (:struct posef-))
 
 #++
 (defmethod translate-from-foreign (value (type posef))
@@ -315,7 +315,7 @@
   (:pad :float)
   (:time-in-seconds :double))
 
-(defctype pose-statef (:struct pose-statef-))
+;(defctype pose-statef (:struct pose-statef-))
 
 #++
 (defmethod translate-from-foreign (value (type pose-statef))
@@ -338,7 +338,7 @@
   (:left-tan :float)
   (:right-tan :float))
 
-(defctype fov-port (:struct fov-port-))
+;(defctype fov-port (:struct fov-port-))
 
 (defcenum (%ovrhmd::type- :unsigned-int)
   (:none 0)
@@ -351,7 +351,7 @@
   (:e3-2015 10)
   (:es06 11))
 
-(defctype %ovrhmd::type  %ovrhmd::type-)
+;(defctype %ovrhmd::type  %ovrhmd::type-)
 
 (defbitfield (%ovrhmd::caps- :unsigned-int)
   ;(:present 1)
@@ -369,7 +369,7 @@
   #++(:writable-mask 0)
   #++(:service-mask 0))
 
-(defctype %ovrhmd::caps %ovrhmd::caps-)
+;(defctype %ovrhmd::caps %ovrhmd::caps-)
 
 (defbitfield (tracking-caps- :unsigned-int)
   (:orientation 16)
@@ -377,7 +377,7 @@
   (:position 64)
   (:idle 256))
 
-(defctype tracking-caps tracking-caps-)
+;(defctype tracking-caps tracking-caps-)
 
 (defbitfield (distortion-caps- :unsigned-int)
   (:time-warp 2)
@@ -392,7 +392,7 @@
   (:timewarp-jit-delay 4096)
   (:profile-no-spin-waits 65536))
 
-(defctype distortion-caps distortion-caps-)
+;(defctype distortion-caps distortion-caps-)
 
 (defcenum (eye-type- :unsigned-int)
   (:left 0)
@@ -403,7 +403,7 @@
 (defconstant +eye-left+ 0)
 (defconstant +eye-right+ 1)
 
-(defctype eye-type eye-type-)
+;(defctype eye-type eye-type-)
 
 (defcstruct graphics-luid-
   (reserved :char :count 16))
@@ -428,8 +428,8 @@
           (mem-aref ,p '(:struct fov-port-) 1)))
 
 (defcstruct %ovrhmd::desc-
-  (:type %ovrhmd::type)
-  (pad :char :count 4)
+  (:type :unsigned-int);;%ovrhmd::type-
+  (pad :unsigned-int) ;; this one is required
   (:product-name (:struct char64-))
   (:manufacturer (:struct char64-))
   (:vendor-id :short)
@@ -441,17 +441,18 @@
   (:camera-frustum-vfov-in-radians :float)
   (:camera-frustum-near-z-in-meters :float)
   (:camera-frustum-far-z-in-meters :float)
-  (:available-hmd-caps %ovrhmd::caps)
-  (:default-hmd-caps %ovrhmd::caps)
-  (:available-tracking-caps tracking-caps)
-  (:default-tracking-caps tracking-caps)
+  (:available-hmd-caps :unsigned-int);;%ovrhmd::caps-
+  (:default-hmd-caps :unsigned-int);;%ovrhmd::caps-
+  (:available-tracking-caps :unsigned-int);;tracking-caps-
+  (:default-tracking-caps :unsigned-int);;tracking-caps-
   (:default-eye-fov (:struct fov-port-2-))
   (:max-eye-fov (:struct fov-port-2-))
   (:resolution (:struct sizei-))
   (:display-refresh-rate :float)
-  (pad1 :char :count 4))
+  ;;  (pad1 :unsigned-int) ;; this one breaks things (on some machines?)
+  )
 
-(defctype %ovrhmd::desc (:struct %ovrhmd::desc-))
+;(defctype %ovrhmd::desc (:struct %ovrhmd::desc-))
 
 (defcstruct %ovrhmd::struct
   )
@@ -464,7 +465,7 @@
   (:position-connected #x20)
   (:hmd-connected #x80))
 
-(defctype status-bits status-bits-)
+;(defctype status-bits status-bits-)
 
 (defcstruct (sensor-data- :class sensor-data)
   (:accelerometer (:struct vector3f-))
@@ -473,7 +474,7 @@
   (:temperature :float)
   (:time-in-seconds :float))
 
-(defctype sensor-data (:struct sensor-data-))
+;(defctype sensor-data (:struct sensor-data-))
 
 #++
 (defmethod translate-from-foreign (value (type sensor-data))
@@ -498,7 +499,7 @@
   (:last-camera-frame-counter uint32-t)
   (:pad uint32-t))
 
-(defctype tracking-state (:struct tracking-state-))
+;(defctype tracking-state (:struct tracking-state-))
 
 (defcstruct frame-timing-
   (:display-midpoiont-seconds :double)
@@ -506,7 +507,7 @@
   (:app-frame-index :unsigned-int)
   (:display-frame-index :unsigned-int))
 
-(defctype frame-timing (:struct frame-timing-))
+;(defctype frame-timing (:struct frame-timing-))
 
 (defcstruct (eye-render-desc- :class eye-render-desc)
   (:eye :unsigned-int) ;; eye-type-
@@ -515,7 +516,7 @@
   (:pixels-per-tan-angle-at-center (:struct vector2f-))
   (:hmd-to-eye-view-offset (:struct vector3f-)))
 
-(defctype eye-render-desc (:struct eye-render-desc-))
+;(defctype eye-render-desc (:struct eye-render-desc-))
 
 #++
 (defmethod translate-from-foreign (value (type eye-render-desc))
@@ -546,53 +547,53 @@
   (:android-gles 2)
   (:d3d11 5))
 
-(defctype render-apitype render-apitype-)
+;(defctype render-apitype render-apitype-)
 
 (defcstruct render-api-config-header-
-  (:api render-apitype)
+  (:api render-apitype-)
   (:back-buffer-size (:struct sizei-))
   (:multisample :int))
 
-(defctype render-api-config-header (:struct render-api-config-header-))
+;(defctype render-api-config-header (:struct render-api-config-header-))
 
 (defcstruct render-api-config-
-  (:header render-api-config-header)
+  (:header (:struct render-api-config-header-))
   (:platform-data uintptr-t :count 8))
 
-(defctype render-api-config (:struct render-api-config-))
+;(defctype render-api-config (:struct render-api-config-))
 
 (defcstruct gl-config-data-
-  (:header render-api-config-header)
+  (:header (:struct render-api-config-header-))
   #+windows (:window :pointer)
   #+windows (:dc :pointer)
   #+linux (:x-display :pointer))
 
-(defctype gl-config-data (:struct gl-config-data-))
+;(defctype gl-config-data (:struct gl-config-data-))
 ;; not sure if this should define ovrGLConfig or not?
 #++ (defcunion gl-config
       (config render-api-config)
       (gl gl-config-data))
 
 (defcstruct texture-header-
-  (:api render-apitype)
+  (:api render-apitype-)
   (:texture-size (:struct sizei-)))
 
-(defctype texture-header (:struct texture-header-))
+;(defctype texture-header (:struct texture-header-))
 
 
 (defcstruct texture-x
-  (:header texture-header)
+  (:header (:struct texture-header-))
   (:pad :char :count 4)
   (:platform-data uintptr-t :count 8))
 
 ;; just defining the GL version for now...
 (defcstruct texture-
-  (:api render-apitype)
+  (:api render-apitype-)
   (:texture-size (:struct sizei-))
   ;;? (:pad :char :count 4)
   (:texture-id :unsigned-int))
 
-(defctype texture (:struct texture-))
+;(defctype texture (:struct texture-))
 
 (defcstruct swap-texture-set-
   (:textures (:pointer (:struct texture-)))
@@ -657,27 +658,27 @@
   )
 
 
-(defctype init-flags init-flags-)
+;(defctype init-flags init-flags-)
 
 (defcenum (log-level- :unsigned-int)
   (:debug 0)
   (:info 1)
   (:error 2))
 
-(defctype log-level log-level-)
+;(defctype log-level log-level-)
 
 ;; typedef void (OVR_CDECL* ovrLogCallback)(uintptr_t userData, int level, const char* message);
 (defctype log-callback :pointer)
 
 (defcstruct init-params-
-  (flags init-flags)
+  (flags init-flags-)
   (requested-minor-version uint32-t)
   (log-callback log-callback)
   (user-data uintptr-t)
   (connection-timeout-ms uint32-t)
   (pad :char :count 4))
 
-(defctype init-params (:struct init-params-))
+;(defctype init-params (:struct init-params-))
 
 
 #++
