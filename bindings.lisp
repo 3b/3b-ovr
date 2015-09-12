@@ -29,7 +29,7 @@
     (%initialize ip)))
 
 (defcfun ("ovr_Shutdown" shutdown) :void
-)
+  )
 
 (defmacro with-ovr (initialized-p-var
                     (&rest options
@@ -50,12 +50,11 @@
 
 
 (defcfun ("ovr_GetVersionString" get-version-string) :string
-)
+  )
 
 (defcfun ("ovr_TraceMessage" trace-message) :int
   (level :int)
   (message :string))
-
 
 
 (defcfun ("ovr_Create" %create) checked-result
@@ -63,7 +62,7 @@
   (luid (:pointer (:struct graphics-luid-))))
 
 
-(defcfun ("ovr_GetHmdDesc" get-hmd-desc) (:struct %ovrhmd::desc-)
+(defcfun ("ovr_GetHmdDesc" get-hmd-desc) (:struct hmd-desc-)
   (hmd hmd))
 
 (defcfun ("ovr_Destroy" destroy) :void
@@ -72,9 +71,20 @@
 (defun create-hmd ()
   (with-foreign-objects ((p :pointer)
                          (luid '(:struct graphics-luid-)))
+    (setf (mem-ref p :pointer) (make-pointer #x0123456789abcdef))
+    (format t "p = ~s, *p = ~s~%" p (cffi:mem-aref p :pointer))
+    (format t "l = ~s, *l = ~s~%" luid (cffi:mem-aref luid :pointer))
     (%create p luid)
+    (format t "p = ~s, *p = ~s~%" p (cffi:mem-aref p :pointer))
+    (format t "l = ~s, *l = ~s~%" luid (cffi:mem-aref luid :pointer))
+    (Format t "~&**p = ~{~2,'0x~^ ~}~%"
+            (loop for i below 8
+                  collect (mem-aref (mem-aref p :pointer) :unsigned-char i)))
     (values (cffi:mem-aref p :pointer)
-            (cffi:mem-aref luid '(:struct graphics-luid-)))))
+            #++(cffi:mem-aref luid '(:struct graphics-luid-))
+            (format nil "~{~2,'0x~}"
+                    (loop for i below 8
+                          collect (cffi:mem-aref luid :unsigned-char i))))))
 
 (defmacro with-hmd ((hmd-var luid-var &optional desc-var)
                     &body body)
@@ -82,15 +92,20 @@
     `(multiple-value-bind (,hmd ,luid-var)
          (create-hmd)
        (declare (ignorable ,luid-var))
+       (Format t "~&*hmd = ~{~2,'0x~^ ~}~%"
+               (loop for i below 16
+                     collect (mem-aref ,hmd :unsigned-char i)))
        (let* ((,hmd-var (if (null-pointer-p ,hmd)
-                        nil
-                        ,hmd))
+                            nil
+                            ,hmd))
               ,@(when desc-var
                   `((,desc-var (get-hmd-desc ,hmd)))))
          (unwind-protect
               (progn ,@body)
            (unless (null-pointer-p ,hmd)
-             (destroy ,hmd)))))))
+             (format t "destroy hmd ~s~%" ,hmd)
+             (destroy ,hmd)
+             (format t "done with-hmd~%")))))))
 
 #++
 (defun dump-hmd-to-plist (hmd) ;; use get-hmd-desc instead?
@@ -138,12 +153,12 @@
             :display-device-name (slot display-device-name)
             :display-id (slot display-id)))))
 
-(defcfun ("ovr_GetEnabledCaps" get-enabled-caps) %ovrhmd::caps-
+(defcfun ("ovr_GetEnabledCaps" get-enabled-caps) hmd-caps-
   (hmd hmd))
 
 (defcfun ("ovr_SetEnabledCaps" set-enabled-caps) :void
   (hmd hmd)
-  (hmd-caps %ovrhmd::caps-))
+  (hmd-caps hmd-caps-))
 
 (defcfun ("ovr_ConfigureTracking" configure-tracking) checked-result
   (hmd hmd)
@@ -158,7 +173,7 @@
   (abs-time :double))
 
 (defun get-tracking-state (hmd
-                                    &optional (abs-time 0d0))
+                           &optional (abs-time 0d0))
   (%get-tracking-state hmd (float abs-time 0d0)))
 
 (defcfun ("ovr_GetInputState" %get-input-state) checked-result
@@ -166,9 +181,9 @@
   (controller-type-mask controller-type)
   (input-state (:pointer (:struct input-state-))))
 
-(defun %ovrhmd::get-input-state (hmd controller-types)
+(defun get-input-state (hmd controller-types)
   (with-foreign-object (p '(:struct input-state-))
-   (%get-input-state hmd controller-types p)
+    (%get-input-state hmd controller-types p)
     (mem-aref p '(:struct input-state-))))
 
 (defcfun ("ovr_SetControllerVibration" set-controller-vibration) checked-result
@@ -187,13 +202,14 @@
 
 (defcfun ("ovr_GetFovTextureSize" get-fov-texture-size) (:struct sizei-)
   (hmd hmd)
-  (eye :unsigned-int) ; eye-type
+  (eye :unsigned-int)                   ; eye-type
   (fov (:struct fov-port-))
   (pixels-per-display-pixel :float))
 
 (defcfun ("ovr_GetRenderDesc" get-render-desc) (:struct eye-render-desc-)
   (hmd hmd)
-  (eye-type :unsigned-int ) ;; eye-type
+  ;; not sure if this should be int or enum?
+  (eye-type :unsigned-int) ;; eye-type
   (fov (:struct fov-port-)))
 
 (defcfun ("ovr_SubmitFrame" %submit-frame) checked-result
@@ -203,12 +219,55 @@
   (layer-pointer-list (:pointer (:pointer (:struct layer-header-))))
   (layer-count :unsigned-int))
 
+(defun type-for-layer (layer)
+  (if layer
+      (ecase (getf layer :type)
+        (:disabled nil)
+        (:eye-fov '(:struct layer-eye-fov-))
+        (:eye-fov-depth '(:struct layer-eye-fov-depth-))
+        ((:quad-in-world :quad-head-locked) '(:struct layer-eye-quad-))
+        (:direct '(:struct layer-eye-direct-)))
+      nil))
+
+(defmacro with-layer-pointers ((pointer-var layers)
+                               &body body)
+  (alexandria:with-gensyms (pointers p i layer type)
+    (alexandria:once-only (layers)
+      `(let ((,pointers))
+         (unwind-protect
+              (progn
+                ;; not just COLLECTing the list so we can free prior
+                ;; allocation even if we have errors in a later layer
+                (loop for ,i from 0
+                      for ,layer in ,layers
+                      for ,type = (type-for-layer ,layer)
+                      when ,type
+                        do (push (foreign-alloc ,type)
+                                 ,pointers)
+                           (setf (mem-aref (car ,pointers) ,type)
+                                 ,layer))
+                (setf ,pointers (nreverse ,pointers))
+                (with-foreign-object (,pointer-var :pointer (length layers))
+                  (loop for ,p in ,pointers
+                        for ,i from 0
+                        do (setf (mem-aref ,pointer-var :pointer)
+                                 (or ,p (null-pointer))))
+                  ,@body))
+           (loop for ,p in ,pointers
+                 when (and ,p (not (null-pointer-p ,p)))
+                   do (foreign-free ,p)))))))
+
+(defun submit-frame (hmd layers &key (frame-index 0) view-scale-desc)
+  (with-layer-pointers (p layers)
+    (%submit-frame hmd frame-index (or view-scale-desc (null-pointer))
+                   p (length layers))))
+
 (defcfun ("ovr_GetFrameTiming" get-frame-timing) (:struct frame-timing-)
   (hmd hmd)
   (frame-index :unsigned-int))
 
 (defcfun ("ovr_GetTimeInSeconds" get-time-in-seconds) :double
-)
+  )
 
 (defcfun ("ovr_ResetBackOfHeadTracking" reset-back-of-head-tracking) :void
   (hmd hmd))
@@ -535,25 +594,7 @@
 #++
 (defcfun ("ovr_StopPerfLog" %ovr::stop-perf-log) bool
   (hmd hmd))
-#++
-(defcfun ("ovrMatrix4f_Projection" %matrix4f-projection) (:struct matrix4f-)
-  (fov (:struct fov-port-))
-  (znear :float)
-  (zfar :float)
-  (projection-mod-flags :unsigned-int)) ;;projection-modifier
-#++
-(defun matrix4f-projection (fov znear zfar projection-mod-flags)
-  (%matrix4f-projection fov znear zfar
-                        (foreign-bitfield-value
-                         'projection-modifier-
-                         projection-mod-flags))
-  )
-#++
-(defcfun ("ovrMatrix4f_OrthoSubProjection" matrix4f-ortho-sub-projection) (:struct matrix4f-)
-  (projection matrix4f)
-  (ortho-scale (:struct vector2f-))
-  (ortho-distance :float)
-  (hmd-to-eye-view-offset-x :float))
+
 #++
 (defcfun ("ovr_WaitTillTime" wait-till-time) :double
   (abs-time :double))
@@ -566,10 +607,34 @@
   (height :int)
   (texture-set (:pointer (:pointer (:struct swap-texture-set-)))))
 
+(defcfun ("ovr_CreateMirrorTextureGL" %create-mirror-texture-gl) checked-result
+  (hmd hmd)
+  (format %gl:enum)
+  (width :int)
+  (height :int)
+  (texture (:pointer (:pointer (:struct texture-)))))
+
 (defun create-swap-texture-set-gl (hmd width height &key (format :srgb8-alpha8))
   (with-foreign-object (out :pointer)
     (%create-swap-texture-set-gl hmd format width height out)
     (mem-aref out :pointer)))
+
+(defun create-mirror-texture-gl (hmd width height &key (format :srgb8-alpha8))
+  (with-foreign-object (out :pointer)
+    (%create-mirror-texture-gl hmd format width height out)
+    (mem-aref out :pointer)))
+
+(defmacro with-mirror-texture (var (hmd width height &key (format :srgb8-alpha8))
+                               &body body)
+  (let ((p (gensym "MIRROR-TEXTURE")))
+    `(let ((,p (create-mirror-texture-gl ,hmd ,width ,height
+                                         :format ,format)))
+       (unwind-protect
+            (let ((,var (unless (null-pointer-p ,p)
+                          (mem-aref ,p '(:struct texture-)))))
+              ,@body)
+         (unless (null-pointer-p ,p)
+           (destroy-mirror-texture ,hmd ,p))))))
 
 (defmacro with-swap-texture-set (var (hmd width height &key (format :srgb8-alpha8))
                                  &body body)
@@ -588,15 +653,18 @@
 (defun swap-texture-set-count (swap-texture-set)
   (foreign-slot-value swap-texture-set '(:struct swap-texture-set-)
                       :texture-count))
+
 (defun swap-texture-set-index (swap-texture-set)
   (foreign-slot-value swap-texture-set '(:struct swap-texture-set-)
                       :current-index))
+
 (defun (setf swap-texture-set-index) (new swap-texture-set)
   ;; should this just MOD instead of erroring?
   (assert (< -1 new (swap-texture-set-count swap-texture-set)))
   (setf (foreign-slot-value swap-texture-set '(:struct swap-texture-set-)
                             :current-index)
         new))
+
 (defun swap-texture-set-next-index (swap-texture-set)
   (setf (foreign-slot-value swap-texture-set
                             '(:struct swap-texture-set-)
@@ -609,25 +677,61 @@
 (defun swap-texture-set-textures (swap-texture-set)
   (coerce
    (loop for i below (swap-texture-set-count swap-texture-set)
-         collect (mem-aref (foreign-slot-pointer swap-texture-set
-                                                 '(:struct swap-texture-set-)
-                                                 :textures)
+         collect (mem-aref (foreign-slot-value swap-texture-set
+                                               '(:struct swap-texture-set-)
+                                               :textures)
                            '(:struct texture-)
                            i))
    'vector))
 
 (defun texture-set-next-texture (swap-texture-set)
   (let* ((i (swap-texture-set-next-index swap-texture-set)))
-    (mem-aref (foreign-slot-pointer swap-texture-set
-                                    '(:struct swap-texture-set-)
-                                    :textures)
+    (mem-aref (foreign-slot-value swap-texture-set
+                                  '(:struct swap-texture-set-)
+                                  :textures)
               '(:struct texture-)
               i)))
 
+(defun texture-set-next-texture-id (swap-texture-set)
+  (getf (texture-set-next-texture swap-texture-set)
+        :texture-id))
 
 
+;;; from OVR_CAPI_Util.h
+;; possibly should just reimplement some of these in lisp?
+;; todo: rest of file...
+
+(defcfun ("ovr_CalcEyePoses" %calc-eye-poses) :void
+  (head-pose (:struct posef-))
+  (hmd-to-eye-view-offsets (:pointer (:struct vector3f-))) ;; [2]
+  (out-eye-poses (:pointer (:struct posef-))))             ;; [2]
 
 
-(initialize :debug t)
-;(format t "error = ~s~%"(get-last-error))
-;(shutdown)
+(defcfun ("ovrMatrix4f_Projection" %matrix4f-projection) (:struct matrix4f-)
+  (fov (:struct fov-port-))
+  (znear :float)
+  (zfar :float)
+  (projection-mod-flags :unsigned-int)) ;;projection-modifier-
+
+(defun matrix4f-projection (fov znear zfar projection-mod-flags)
+  (%matrix4f-projection fov znear zfar
+                        (foreign-bitfield-value 'projection-modifier-
+                                                projection-mod-flags)))
+
+(defcfun ("ovrMatrix4f_OrthoSubProjection" matrix4f-ortho-sub-projection) (:struct matrix4f-)
+  (projection (:struct matrix4f-))
+  (ortho-scale (:struct vector2f-))
+  (ortho-distance :float)
+  (hmd-to-eye-view-offset-x :float))
+
+(defun calc-eye-poses (head-pose eye-offsets)
+  (with-foreign-objects ((htevo '(:struct vector3f-) 2)
+                         (out '(:struct posef-) 2))
+    (dotimes (i 2)
+      (setf (mem-aref htevo '(:struct vector3f-) i)
+            (elt eye-offsets i)))
+    (%calc-eye-poses head-pose htevo out)
+    (coerce
+     (loop for i below 2
+           collect (mem-aref out '(:struct posef-) i))
+     'vector)))

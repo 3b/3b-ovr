@@ -268,28 +268,6 @@
                      (cffi:mem-aref ,p :float 1)
                      (cffi:mem-aref ,p :float 2)))
 
-
-(defcstruct (matrix4f- :class matrix4f)
-  (m :float :count 16))
-
-;(defctype matrix4f (:struct matrix4f-))
-
-(define-cffi-translators (p v (:struct matrix4f-) matrix4f)
-  :write `(etypecase ,v
-            ((simple-array single-float (16))
-             ;; not sure if loop or unrolling would be better here?
-             (loop for i below 16
-                   do (cffi:mem-aref ,p :float i) (aref ,v i)))
-            (sequence
-             (loop for i below 16
-                   do (cffi:mem-aref ,p :float i) (float (elt ,v i) 1.0))))
-  :read `(make-array 16
-                     :element-type 'single-float
-                     :initial-contents
-                     (list
-                      ,@(loop for i below 16
-                              collect `(cffi:mem-aref ,p :float ,i)))))
-
 (defcstruct (posef- :class posef)
   (:orientation (:struct quatf-))
   (:position (:struct vector3f-)))
@@ -340,7 +318,7 @@
 
 ;(defctype fov-port (:struct fov-port-))
 
-(defcenum (%ovrhmd::type- :unsigned-int)
+(defcenum (hmd-type- :unsigned-int)
   (:none 0)
   (:dk1 3)
   (:dkhd 4)
@@ -353,7 +331,7 @@
 
 ;(defctype %ovrhmd::type  %ovrhmd::type-)
 
-(defbitfield (%ovrhmd::caps- :unsigned-int)
+(defbitfield (hmd-caps- :unsigned-int)
   ;(:present 1)
   ;(:available 2)
   ;(:captured 4)
@@ -406,7 +384,7 @@
 ;(defctype eye-type eye-type-)
 
 (defcstruct graphics-luid-
-  (reserved :char :count 16))
+  (reserved :char :count 8))
 
 (defcstruct (char64- :class char64)
   (string :char :count 64))
@@ -427,9 +405,9 @@
           (mem-aref ,p '(:struct fov-port-) 0)
           (mem-aref ,p '(:struct fov-port-) 1)))
 
-(defcstruct %ovrhmd::desc-
-  (:type :unsigned-int);;%ovrhmd::type-
-  (pad :unsigned-int) ;; this one is required
+(defcstruct hmd-desc-
+  (:type hmd-type-)
+  (pad :char :count 4)
   (:product-name (:struct char64-))
   (:manufacturer (:struct char64-))
   (:vendor-id :short)
@@ -441,22 +419,22 @@
   (:camera-frustum-vfov-in-radians :float)
   (:camera-frustum-near-z-in-meters :float)
   (:camera-frustum-far-z-in-meters :float)
-  (:available-hmd-caps :unsigned-int);;%ovrhmd::caps-
-  (:default-hmd-caps :unsigned-int);;%ovrhmd::caps-
-  (:available-tracking-caps :unsigned-int);;tracking-caps-
-  (:default-tracking-caps :unsigned-int);;tracking-caps-
+  (:available-hmd-caps hmd-caps-)
+  (:default-hmd-caps hmd-caps-)
+  (:available-tracking-caps tracking-caps-)
+  (:default-tracking-caps tracking-caps-)
   (:default-eye-fov (:struct fov-port-2-))
   (:max-eye-fov (:struct fov-port-2-))
   (:resolution (:struct sizei-))
   (:display-refresh-rate :float)
-  ;;  (pad1 :unsigned-int) ;; this one breaks things (on some machines?)
+  (pad1 :char :count 4)
   )
 
 ;(defctype %ovrhmd::desc (:struct %ovrhmd::desc-))
 
-(defcstruct %ovrhmd::struct
+(defcstruct hmd-struct
   )
-(defctype hmd (:pointer (:struct %ovrhmd::struct)))
+(defctype hmd (:pointer (:struct hmd-struct)))
 
 (defbitfield (status-bits- :unsigned-int)
   (:orientation-tracked 1)
@@ -510,6 +488,9 @@
 ;(defctype frame-timing (:struct frame-timing-))
 
 (defcstruct (eye-render-desc- :class eye-render-desc)
+  ;; not sure if this is more useful as an int or :left/:right ?
+  ;; leaving as int for now, since we probably want to index into sequence
+  ;; more often than describe it
   (:eye :unsigned-int) ;; eye-type-
   (:fov (:struct fov-port-))
   (:distorted-viewport (:struct recti-))
@@ -590,8 +571,8 @@
 (defcstruct texture-
   (:api render-apitype-)
   (:texture-size (:struct sizei-))
-  ;;? (:pad :char :count 4)
-  (:texture-id :unsigned-int))
+  (:texture-id :unsigned-int)
+  (pad uintptr-t :count 8))
 
 ;(defctype texture (:struct texture-))
 
@@ -709,17 +690,6 @@
 (defctype hswdisplay-state (:struct hswdisplay-state-))
 
 
-#++
-(defbitfield (projection-modifier- :unsigned-int)
-  (:none 0)
-  (:right-handed 1)
-  (:far-less-than-near 2)
-  (:far-clip-at-infinity 4)
-  (:clip-range-open-gl 8))
-#++
-(defctype projection-modifier projection-modifier-)
-
-
 ;; constants for get-*
 (defparameter *ovr-key*
   (alexandria:plist-hash-table
@@ -775,6 +745,48 @@
 ;; #define
 ;; #define
 
+(defcstruct (recti-2- :class recti-2)
+  (rects (:struct recti-) :count 2))
+
+(define-cffi-translators (p v (:struct recti-2-) recti-2)
+  :write `(progn
+            (setf (mem-aref ,p '(:struct recti-) 0)
+                  (elt ,v 0))
+            (setf (mem-aref ,p '(:struct recti-) 1)
+                  (elt ,v 1)))
+  :read `(vector
+          (mem-aref ,p '(:struct recti-) 0)
+          (mem-aref ,p '(:struct recti-) 1)))
+
+
+(defcstruct (posef-2- :class posef-2)
+  (poses (:struct posef-) :count 2))
+
+(define-cffi-translators (p v (:struct posef-2-) posef-2)
+  :write `(progn
+            (setf (mem-aref ,p '(:struct posef-) 0)
+                  (elt ,v 0))
+            (setf (mem-aref ,p '(:struct posef-) 1)
+                  (elt ,v 1)))
+  :read `(vector
+          (mem-aref ,p '(:struct posef-) 0)
+          (mem-aref ,p '(:struct posef-) 1)))
+
+
+
+(defcstruct (pointer-2- :class pointer-2)
+  (pointers :pointer :count 2))
+
+(define-cffi-translators (p v (:struct pointer-2-) pointer-2)
+  :write `(progn
+            (setf (mem-aref ,p :pointer 0)
+                  (elt ,v 0))
+            (setf (mem-aref ,p :pointer 1)
+                  (elt ,v 1)))
+  :read `(vector
+          (mem-aref ,p ':pointer 0)
+          (mem-aref ,p ':pointer 1)))
+
 
 (defcenum (layer-type :unsigned-int)
   (:disabled 0)
@@ -796,19 +808,19 @@
   ;; expanding header inline to simplify access...
   (:type layer-type) ;; must be eye-fov
   (:flags layer-flags)
-  (:color-texture (:pointer (:struct swap-texture-set-)) :count 2)
-  (:viewport (:struct recti-) :count 2)
+  (:color-texture (:struct pointer-2-)) ;; (:pointer (:struct swap-texture-set-)) :count 2
+  (:viewport (:struct recti-2-))
   (:fov (:struct fov-port-2-))
-  (:render-pose (:struct posef-) :count 2))
+  (:render-pose (:struct posef-2-)))
 
 (defcstruct layer-eye-fov-depth-
   ;; expanding header inline to simplify access...
   (:type layer-type) ;; must be eye-fov-depth
   (:flags layer-flags)
   (:color-texture (:pointer (:struct swap-texture-set-)) :count 2)
-  (:viewport (:struct recti-) :count 2)
+  (:viewport (:struct recti-2-))
   (:fov (:struct fov-port-2-))
-  (:render-pose (:struct posef-) :count 2)
+  (:render-pose (:struct posef-2-))
   (:depth-texture (:pointer (:struct swap-texture-set-)) :count 2)
   (:projection-desc (:struct timewarp-projection-desc-)))
 
@@ -826,18 +838,48 @@
   (:type layer-type) ;; must be eye-direct
   (:flags layer-flags)
   (:color-texture (:pointer (:struct swap-texture-set-)) :count 2)
-  (:viewport (:struct recti-) :count 2))
+  (:viewport (:struct recti-2-)))
 
 
 (defcenum (perf-hud-mode :unsigned-int)
   (:off 0)
-  (:latency-timing 1);;Shows latency related timing info
-  (:render-timing 2);;Shows CPU & GPU timing info
-  (:perf-headroom 3);;Shows available performance headroom in a "consumer-friendly" way
-  (:version-info 4));;Shows SDK Version Info
+  (:latency-timing 1) ;;Shows latency related timing info
+  (:render-timing 2)  ;;Shows CPU & GPU timing info
+  (:perf-headroom 3) ;;Shows available performance headroom in a "consumer-friendly" way
+  (:version-info 4)) ;;Shows SDK Version Info
 
 (defcenum (debug-hud-stereo-mode :unsigned-int)
   (:off 0)
-  (:quad 1);;Renders Quad in world for Stereo Debugging
-  (:quad-with-crosshair 2);;Renders Quad+crosshair in world for Stereo Debugging
-  (:crosshair-at-infinity 3));;Renders screen-space crosshair at infinity for Stereo Debugging
+  (:quad 1) ;;Renders Quad in world for Stereo Debugging
+  (:quad-with-crosshair 2) ;;Renders Quad+crosshair in world for Stereo Debugging
+  (:crosshair-at-infinity 3)) ;;Renders screen-space crosshair at infinity for Stereo Debugging
+
+
+
+;;; from OVR_CAPI_Util.h
+
+(defcstruct (matrix4f- :class matrix4f)
+  (m :float :count 16))
+
+(define-cffi-translators (p v (:struct matrix4f-) matrix4f)
+  :write `(etypecase ,v
+            ((simple-array single-float (16))
+             ;; not sure if loop or unrolling would be better here?
+             (loop for i below 16
+                   do (cffi:mem-aref ,p :float i) (aref ,v i)))
+            (sequence
+             (loop for i below 16
+                   do (cffi:mem-aref ,p :float i) (float (elt ,v i) 1.0))))
+  :read `(make-array 16
+                     :element-type 'single-float
+                     :initial-contents
+                     (list
+                      ,@(loop for i below 16
+                              collect `(cffi:mem-aref ,p :float ,i)))))
+
+(defbitfield (projection-modifier- :unsigned-int)
+  (:none 0)
+  (:right-handed 1)
+  (:far-less-than-near 2)
+  (:far-clip-at-infinity 4)
+  (:clip-range-open-gl 8))
